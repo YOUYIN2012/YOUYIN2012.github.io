@@ -2,81 +2,101 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-  <title>如愿</title>
-  <link rel="shortcut icon" href="static/images/day_gift_heart_love_valentine_icon.png" type="image/x-icon"/>
-  <style>
-    body {
-      background-color: #f7e9e3;
-      font-family: Arial, sans-serif;
-      text-align: center;
-      margin-top: 100px;
-    }
+    <title>如愿</title>
+    <link rel="shortcut icon" href="static/images/day_gift_heart_love_valentine_icon.png" type="image/x-icon"/>
+    <style>
+        body {
+            background-color: #f7e9e3;
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin-top: 100px;
+        }
 
-    h1 {
-      color: #ff5370;
-      font-size: 36px;
-    }
+        h1 {
+            color: #ff5370;
+            font-size: 36px;
+        }
 
-    p {
-      color: #ff5370;
-      font-size: 24px;
-      margin-top: 30px;
-    }
+        p {
+            color: #ff5370;
+            font-size: 24px;
+            margin-top: 30px;
+        }
 
-    .heart {
-      position: relative;
-      width: 100px;
-      height: 100px;
-      background-color: #ff5370;
-      margin: 0 auto;
-      transform: rotate(45deg);
-      animation: heartbeat 1s infinite;
-    }
+        .heart {
+            position: relative;
+            width: 100px;
+            height: 100px;
+            background-color: #ff5370;
+            margin: 0 auto;
+            transform: rotate(45deg);
+            animation: heartbeat 1s infinite;
+        }
 
-    .heart:before,
-    .heart:after {
-      position: absolute;
-      content: "";
-      left: 50px;
-      top: 0;
-      width: 50px;
-      height: 80px;
-      background-color: #ff5370;
-    }
+        .heart:before,
+        .heart:after {
+            position: absolute;
+            content: "";
+            left: 50px;
+            top: 0;
+            width: 50px;
+            height: 80px;
+            background-color: #ff5370;
+        }
 
-    .heart:before {
-      border-radius: 50px 50px 0 0;
-      transform: rotate(-45deg);
-    }
+        .heart:before {
+            border-radius: 50px 50px 0 0;
+            transform: rotate(-45deg);
+        }
 
-    .heart:after {
-      border-radius: 50px 50px 50px 0;
-      transform: rotate(-45deg);
-    }
+        .heart:after {
+            border-radius: 50px 50px 50px 0;
+            transform: rotate(-45deg);
+        }
 
-    @keyframes heartbeat {
-      0% {
-        transform: scale(0.8);
-      }
-      50% {
-        transform: scale(1);
-      }
-      100% {
-        transform: scale(0.8);
-      }
-    }
+        @keyframes heartbeat {
+            0% {
+                transform: scale(0.8);
+            }
+            50% {
+                transform: scale(1);
+            }
+            100% {
+                transform: scale(0.8);
+            }
+        }
 
-    audio {
-      display: none;
-    }
-  </style>
+        audio {
+            display: none;
+        }
+    </style>
 
 </head>
 <body>
-  <h1>如愿</h1>
-  <div class="heart"></div>
-  <p>你的爱是我生命的阳光，每一刻都充满甜蜜和温暖。</p>
-  <p>和你在一起的每一天，都是我最美好的时光。</p>
-<audio src="static/music/周杰伦%20-%20晴天.mp3" id="aud" autoplay="autoplay" controls="controls" loop="loop" preload="auto"></audio>
+<h1>如愿</h1>
+<div class="heart"></div>
+<p>你的爱是我生命的阳光，每一刻都充满甜蜜和温暖。</p>
+<p>和你在一起的每一天，都是我最美好的时光。</p>
+<audio src="static/music/周杰伦%20-%20晴天.mp3" id="bgmusic" autoplay="autoplay" controls="controls" loop="loop"
+       preload="auto"></audio>
+<script src="http://res.wx.qq.com/open/js/jweixin-1.6.0.js"></script>
+<script>
+    function autoPlayAudio1() {
+        wx.config({
+            // 配置信息, 即使不正确也能使用 wx.ready
+            debug: false,
+            appId: '',
+            timestamp: 1,
+            nonceStr: '',
+            signature: '',
+            jsApiList: []
+        });
+        wx.ready(function () {
+            document.getElementById('bgmusic').play();
+        });
+    }
+
+    autoPlayAudio1();
+</script>
 </body>
 </html>
