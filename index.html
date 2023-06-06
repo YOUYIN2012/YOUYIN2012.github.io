@@ -79,24 +79,5 @@
 <p>和你在一起的每一天，都是我最美好的时光。</p>
 <audio src="static/music/周杰伦%20-%20晴天.mp3" id="bgmusic" autoplay="autoplay" controls="controls" loop="loop"
        preload="auto"></audio>
-<script src="http://res.wx.qq.com/open/js/jweixin-1.0.0.js"></script>
-<script>
-    function autoPlayAudio1() {
-        wx.config({
-            // 配置信息, 即使不正确也能使用 wx.ready
-            debug: false,
-            appId: '',
-            timestamp: 1,
-            nonceStr: '',
-            signature: '',
-            jsApiList: []
-        });
-        wx.ready(function () {
-            document.getElementById('bgmusic').play();
-        });
-    }
-
-    autoPlayAudio1();
-</script>
 </body>
 </html>
