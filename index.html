@@ -69,15 +69,39 @@
         audio {
             display: none;
         }
+        img {
+            width: 200px;
+            border-radius: 50%;
+            transition: transform .2s;
+        }
+        img:hover {
+            transform: scale(1.1);
+        }
     </style>
 
 </head>
 <body>
 <h1>如愿</h1>
 <div class="heart"></div>
+<img src="static/images/flower_love_nature_plant_rose_icon.png" alt="你们的照片">
 <p>你的爱是我生命的阳光，每一刻都充满甜蜜和温暖。</p>
 <p>和你在一起的每一天，都是我最美好的时光。</p>
 <audio src="static/music/周杰伦%20-%20晴天.mp3" id="bgmusic" autoplay="autoplay" controls="controls" loop="loop"
        preload="auto"></audio>
+<script>
+
+    var images = ["static/images/flower_love_nature_plant_rose_icon.png"];
+        var date = new Date();
+        var index = date.getDay();
+        document.getElementById("dailyImage").src = images[index];
+        document.querySelector('img').addEventListener('click', function() {
+            var audio = document.getElementById("bgmusic");
+            if(audio.paused) {
+                audio.play();
+            } else {
+                audio.pause();
+            }
+        });
+    </script>
 </body>
 </html>
