@@ -92,18 +92,19 @@
        preload="auto"></audio>
 <script>
 
-    var images = ["static/images/flower_love_nature_plant_rose_icon.png"];
-    var date = new Date();
-    var index = date.getDay();
-    document.getElementById("dailyImage").src = images[index];
+    // var images = ["static/images/flower_love_nature_plant_rose_icon.png"];
+    // var date = new Date();
+    // var index = date.getDay();
+    // document.getElementById("dailyImage").src = images[index];
 
     document.querySelector('img').addEventListener('click', function () {
         var audio = document.getElementById("bgmusic");
-        // if (audio.paused) {
-        //     audio.play();
-        // } else {
+        if (audio.paused) {
+            audio.play();
+        } else {
             audio.pause();
-        // }
+        }
+        // alert("hello");
     });
 </script>
 </body>
