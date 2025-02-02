@@ -3,7 +3,7 @@
   src: url('HYXiXingKaiJ.ttf') format('truetype');
 }
         body {
-            font-family: HYXiXingKaiJ,Arial ,sans-serif;
+            font-family: HYXiXingKaiJ,'Xingkai SC' ,sans-serif;
             background-color: #f7e9e3;
             text-align: center;
             margin-top: 100px;
