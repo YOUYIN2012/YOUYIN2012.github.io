@@ -3,7 +3,7 @@
   src: url('HYXiXingKaiJ.ttf') format('truetype');
 }
         body {
-            font-family: HYXiXingKaiJ,'Xingkai SC' ,sans-serif;
+            font-family:'Xingkai SC' ,sans-serif;
             background-color: #f7e9e3;
             text-align: center;
             margin-top: 100px;
@@ -83,7 +83,7 @@
 
         img {
             width: 200px;
-            border-radius: 50%;
+            border-radius: 10%;
             transition: transform .2s;
         }
 
