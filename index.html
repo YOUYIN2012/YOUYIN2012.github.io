@@ -1,53 +1,50 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <link rel="stylesheet" type="text/css" href="static/css/style.css">
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <meta charset="UTF-8">
-    <title>时光清浅</title>
-    <link rel="shortcut icon" href="static/images/day_gift_heart_love_valentine_icon.png" type="image/x-icon"/>
-    <script>
-        var _hmt = _hmt || [];
-        (function () {
-            var hm = document.createElement("script");
-            hm.src = "https://hm.baidu.com/hm.js?0fd98d8ddb6aa4c0ef9613e44d1aad70";
-            var s = document.getElementsByTagName("script")[0];
-            s.parentNode.insertBefore(hm, s);
-        })();
-    </script>
-
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="description" content="A minimalist love expression">
+    <meta name="theme-color" content="#ff6b9d">
+    <title>爱意随风起</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎁</text></svg>">
+    <link rel="stylesheet" href="static/css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
 </head>
 <body>
+    <!-- 背景装饰 -->
+    <div class="background-decoration" id="backgroundDecoration">
+        <!-- 月亮装饰 -->
+        <div class="moon-decoration">
+            <div class="moon"></div>
+            <div class="moon-glow"></div>
+        </div>
+    </div>
 
+    <!-- 主容器 -->
+    <main class="main-container">
+        <!-- 标题 -->
+        <!-- <h1 class="page-title">Forever</h1> -->
 
-<h1>o(╥﹏╥)o</h1>
-<h2>
-    <img src="static/images/qingtou1.png" alt="qingtou1.png" title="qingtou1.png"/>
-    <img src="static/images/qingtou2.png" alt="qingtou2.png" title="qingtou2.png"/>
-</h2>
+        <!-- 副标题 -->
+        <p class="page-subtitle">愿时光温柔，愿你被爱</p>
 
-<!--<img src="static/images/flower_love_nature_plant_rose_icon.png" alt="真的爱你">-->
-<p>------------------------------------------------------------------------------------------------</p>
-<audio id="bgmusic" preload="auto" autoplay="autoplay" controls="controls" loop="loop">
-    <source src="static/music/苏打绿再遇见_audio_only.mp3" type="audio/mp3">
-</audio>
-<script>
+        <!-- 音频控制 -->
+        <button class="audio-toggle" id="audioToggle" aria-label="Toggle background music">
+            <svg class="audio-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 21l6-6H21l-6-6H9v12z"/>
+                <path d="M3 9v6l6-3-6-3z"/>
+            </svg>
+        </button>
+    </main>
 
+    <!-- 背景音乐 -->
+    <audio id="bgMusic" preload="none" loop>
+        <source src="static/music/苏打绿再遇见_audio_only.mp3" type="audio/mp3">
+    </audio>
 
-    document.querySelector('img').addEventListener('click', function () {
-        var audio = document.getElementById("bgmusic");
-        if (!audio.loaded) {
-            audio.load();  // 如果音频未加载，加载音频
-            audio.loaded = true;
-        }
-        if (audio.paused) {
-            audio.play();
-        } else {
-            audio.pause();
-        }
-        // alert("hello");
-    });
-</script>
-
+    <!-- 现代JavaScript -->
+    <script type="module" src="static/js/main.js"></script>
 </body>
 </html>
