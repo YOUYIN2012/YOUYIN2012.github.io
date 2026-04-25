@@ -1,5 +1,4 @@
 /**
- * 简约爱情表达页面 - 现代JavaScript实现
  * 技术栈: ES6+, Web Audio API, Intersection Observer, CSS Grid/Flexbox
  */
 
@@ -433,6 +432,7 @@ style.textContent = `
 
     .bg-element {
         will-change: transform;
+        
     }
 `;
 document.head.appendChild(style);
