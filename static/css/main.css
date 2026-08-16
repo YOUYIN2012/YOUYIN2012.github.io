@@ -1,0 +1,125 @@
+@charset "UTF-8";
+/* ============================================================
+   爱意随风起 · 单屏静谧星河
+   冷色 / 清晰 / 克制：技术复杂度藏在渲染管线里，而不是堆在画面上。
+   分层：reset → tokens → base → components → a11y/perf
+   ============================================================ */
+
+@layer reset, tokens, base, components, a11y;
+
+/* ---------- reset ---------- */
+@layer reset {
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+  canvas, svg { display: block; }
+}
+
+/* ---------- tokens（冷色 OKLCH 系统） ---------- */
+@layer tokens {
+  :root {
+    --ink:       oklch(94% 0.015 240);
+    --ink-dim:   oklch(78% 0.03 230);
+    --accent:    oklch(80% 0.10 220);          /* 冰蓝 */
+    --accent-2:  oklch(74% 0.11 265);          /* 靛蓝 */
+    --deep:      oklch(15% 0.045 250);
+
+    --glass-bg:  color-mix(in oklab, oklch(18% 0.05 245) 52%, transparent);
+    --glass-brd: color-mix(in oklab, var(--ink) 16%, transparent);
+    --glass-blur: saturate(1.2) blur(14px);
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+}
+
+/* ---------- base ---------- */
+@layer base {
+  html, body { height: 100%; }
+  body {
+    font-family: system-ui, -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+    background: linear-gradient(oklch(16% 0.05 250), oklch(10% 0.035 245));
+    color: var(--ink);
+    overflow: hidden;                    /* 单屏：不滚动 */
+    overscroll-behavior: none;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    touch-action: manipulation;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 50%;
+  }
+
+  .layer {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100dvh;
+    contain: strict;
+  }
+  .sky   { z-index: 0; pointer-events: none; }
+  .stage { z-index: 1; touch-action: manipulation; }
+}
+
+/* ---------- components ---------- */
+@layer components {
+  /* 音乐悬浮球 */
+  .fab {
+    position: fixed;
+    right: max(env(safe-area-inset-right, 0px), 1.15rem);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 1.15rem);
+    z-index: 10;
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-brd);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    box-shadow: 0 10px 30px oklch(5% 0.03 250 / 0.45);
+    transition: transform 0.35s var(--ease-spring), border-color 0.35s, box-shadow 0.35s;
+
+    &:hover { transform: scale(1.07); }
+    &:active { transform: scale(0.94); }
+    & .fab-viz {
+      position: absolute;
+      inset: -8px;
+      width: calc(100% + 16px);
+      height: calc(100% + 16px);
+      pointer-events: none;
+    }
+    & .fab-icon {
+      width: 24px; height: 24px;
+      color: var(--ink);
+      position: relative;
+      filter: drop-shadow(0 1px 6px oklch(5% 0.03 250 / 0.6));
+    }
+    & .icon-pause { display: none; }
+    &[aria-pressed="true"] {
+      border-color: color-mix(in oklab, var(--accent) 55%, transparent);
+      box-shadow: 0 10px 30px oklch(5% 0.03 250 / 0.45),
+                  0 0 26px color-mix(in oklab, var(--accent) 30%, transparent);
+      & .icon-play { display: none; }
+      & .icon-pause { display: block; color: var(--accent); }
+    }
+  }
+}
+
+/* ---------- a11y / perf / 多端 ---------- */
+@layer a11y {
+  @media (pointer: coarse) {
+    .fab { width: 64px; height: 64px; }
+  }
+  @media (max-width: 480px) {
+    .fab { right: max(env(safe-area-inset-right, 0px), 0.9rem); bottom: calc(env(safe-area-inset-bottom, 0px) + 0.9rem); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fab { transition: none; }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    .fab { background: oklch(16% 0.05 245); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  }
+}

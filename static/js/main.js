@@ -1,439 +1,237 @@
 /**
- * 技术栈: ES6+, Web Audio API, Intersection Observer, CSS Grid/Flexbox
+ * main.js — 单屏应用入口 / 总编排
+ *
+ * 层次：WebGL2 天空（底）→ Canvas2D 交互层（星尘/爆发/流星/拖尾）
+ * → WebGPU 爆发画布（可用时叠加）→ 音乐球。
+ *
+ * 编排：每帧 engine.tick() 采样一次，音频能量同时驱动
+ * 极光呼吸（sky）与频谱环（fabViz）；
+ * 指针/陀螺仪视差、三连击流星雨、双击/长按切歌、
+ * 自动时段调色板、Service Worker 离线。
  */
 
-// ===== 工具函数 =====
-const random = (min, max) => Math.random() * (max - min) + min;
-const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+import { $, clamp, rafThrottle, haptic, isCoarsePointer } from './utils.js';
+import { Sky, autoPaletteForHour } from './fx/sky.js';
+import { Layer } from './fx/layer.js';
+import { WebGPUBurst } from './fx/webgpu-burst.js';
+import { AudioEngine } from './audio/engine.js';
+import { FabViz } from './ui/viz.js';
 
-// ===== 性能监控 =====
-class PerformanceMonitor {
-    static measure(name, fn) {
-        const start = performance.now();
-        const result = fn();
-        const end = performance.now();
-        console.log(`${name} took ${end - start}ms`);
-        return result;
-    }
+const coarse = isCoarsePointer();
+const params = new URLSearchParams(location.search);
+const skyCanvas = $('#sky');
+const stage = $('#stage');
+const audioFab = $('#audioFab');
+
+/* ===================== 天空与交互层 ===================== */
+const sky = new Sky(skyCanvas);
+if (sky.gl) sky.start();
+else document.body.classList.add('no-webgl');
+
+const layer = new Layer(stage);
+
+/* WebGPU 爆发路由（不可用回落 Canvas 2D；?webgpu=0 可强制关闭） */
+let burstAt = (x, y, opts) => layer.burst(x, y, opts);
+const forceCanvas = params.get('webgpu') === '0';
+
+const initWebGPU = async () => {
+  if (forceCanvas || !('gpu' in navigator)) return;
+  const canvas = document.createElement('canvas');
+  canvas.className = 'layer';
+  canvas.setAttribute('aria-hidden', 'true');
+  canvas.style.zIndex = '2';
+  canvas.style.pointerEvents = 'none';
+  const gpu = new WebGPUBurst(canvas);
+  const inited = await gpu.init();
+  if (inited) {
+    document.body.appendChild(canvas);
+    burstAt = (x, y, opts) => {
+      layer.ring(x, y);               // 光环始终由 2D 层绘制
+      if (!gpu.burst(x, y, opts)) layer.burst(x, y, opts);
+    };
+  } else {
+    canvas.remove();
+  }
+};
+// WebGPU 探测不阻塞首屏；初始化前的点击自然走 Canvas 2D 回退。
+if ('requestIdleCallback' in window) requestIdleCallback(initWebGPU, { timeout: 1500 });
+else setTimeout(initWebGPU, 0);
+
+/* ===================== 音频 ===================== */
+const engine = new AudioEngine($('#audio'));
+const fabViz = new FabViz($('#fabViz'), engine);
+
+engine.onState = ({ playing }) => {
+  audioFab.setAttribute('aria-pressed', String(playing));
+  fabViz.poke();
+  if (playing || engine.energy > 0.002) startEnergyLoop();
+};
+
+/* 音乐球手势：单击 播放/暂停 · 双击 下一首 · 长按 上一首 */
+{
+  const fab = audioFab;
+  let clickTimer = 0;
+  let pressTimer = 0;
+  let longFired = false;
+
+  const fireToggle = () => { haptic(6); engine.toggle(); };
+  const fireNext = () => { haptic(8); engine.next(); };
+  const firePrev = () => { haptic(8); engine.prev(); };
+
+  fab.addEventListener('pointerdown', () => {
+    longFired = false;
+    pressTimer = setTimeout(() => { longFired = true; firePrev(); }, 600);
+  });
+  fab.addEventListener('pointerup', () => clearTimeout(pressTimer));
+  fab.addEventListener('pointercancel', () => clearTimeout(pressTimer));
+  fab.addEventListener('pointerleave', () => clearTimeout(pressTimer));
+
+  fab.addEventListener('click', () => {
+    if (longFired) { longFired = false; return; }
+    clearTimeout(clickTimer);
+    clickTimer = setTimeout(() => {
+      // 等待可能的第二次点击（双击）
+      fireToggle();
+    }, 280);
+  });
+  fab.addEventListener('dblclick', () => {
+    clearTimeout(clickTimer);
+    fireNext();
+  });
+  fab.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fireToggle(); }
+    if (e.key === 'ArrowRight') fireNext();
+    if (e.key === 'ArrowLeft') firePrev();
+  });
 }
 
-// ===== 音频管理器 =====
-class AudioManager {
-    constructor(audioElementId) {
-        this.audio = document.getElementById(audioElementId);
-        this.isPlaying = false;
-        this.isLoaded = false;
-        this.init();
-    }
-
-    init() {
-        // 延迟加载音频以提高页面加载性能
-        this.audio.addEventListener('loadeddata', () => {
-            this.isLoaded = true;
-        });
-
-        // 处理音频播放错误
-        this.audio.addEventListener('error', (e) => {
-            console.warn('Audio loading failed:', e);
-        });
-    }
-
-    async toggle() {
-        try {
-            if (!this.isLoaded) {
-                await this.load();
-            }
-
-            if (this.isPlaying) {
-                await this.pause();
-            } else {
-                await this.play();
-            }
-        } catch (error) {
-            console.error('Audio toggle failed:', error);
-        }
-    }
-
-    async load() {
-        if (!this.isLoaded) {
-            this.audio.load();
-            await new Promise((resolve, reject) => {
-                const onLoad = () => {
-                    this.audio.removeEventListener('loadeddata', onLoad);
-                    this.audio.removeEventListener('error', onError);
-                    resolve();
-                };
-                const onError = (e) => {
-                    this.audio.removeEventListener('loadeddata', onLoad);
-                    this.audio.removeEventListener('error', onError);
-                    reject(e);
-                };
-                this.audio.addEventListener('loadeddata', onLoad);
-                this.audio.addEventListener('error', onError);
-            });
-            this.isLoaded = true;
-        }
-    }
-
-    async play() {
-        await this.audio.play();
-        this.isPlaying = true;
-        this.updateUI();
-    }
-
-    async pause() {
-        this.audio.pause();
-        this.isPlaying = false;
-        this.updateUI();
-    }
-
-    updateUI() {
-        const toggleBtn = document.getElementById('audioToggle');
-        if (toggleBtn) {
-            toggleBtn.classList.toggle('playing', this.isPlaying);
-        }
-    }
+/* 音频采样仅在播放或能量衰减期间运行，空闲后完全休眠。 */
+let energyRaf = 0;
+let lastEnergyTs = 0;
+function startEnergyLoop() {
+  if (energyRaf || document.hidden) return;
+  lastEnergyTs = 0;
+  energyRaf = requestAnimationFrame(energyLoop);
 }
-
-// ===== 背景装饰系统 =====
-class BackgroundDecoration {
-    constructor(containerId) {
-        this.container = document.getElementById(containerId);
-        this.stars = [];
-        this.meteors = [];
-        this.init();
-    }
-
-    init() {
-        if (!this.container) return;
-
-        // 创建星星
-        for (let i = 0; i < 150; i++) {
-            this.createStar();
-        }
-
-        // 创建流星
-        for (let i = 0; i < 3; i++) {
-            this.createMeteor();
-        }
-
-        // 开始闪烁动画
-        this.startTwinkling();
-        // 开始流星动画
-        this.startMeteorShower();
-    }
-
-    createStar() {
-        const star = document.createElement('div');
-        star.className = 'star';
-        star.style.cssText = `
-            position: absolute;
-            left: ${Math.random() * 100}%;
-            top: ${Math.random() * 100}%;
-            width: ${Math.random() * 3 + 1}px;
-            height: ${Math.random() * 3 + 1}px;
-            background: #ffffff;
-            border-radius: 50%;
-            pointer-events: none;
-            box-shadow: 0 0 ${Math.random() * 10 + 5}px rgba(255, 255, 255, 0.8);
-        `;
-
-        this.stars.push(star);
-        this.container.appendChild(star);
-    }
-
-    createMeteor() {
-        const meteor = document.createElement('div');
-        meteor.className = 'meteor';
-        meteor.style.cssText = `
-            position: absolute;
-            left: ${Math.random() * 120 - 20}%;
-            top: ${Math.random() * 50}%;
-            width: 2px;
-            height: 2px;
-            background: linear-gradient(45deg, #ffffff, transparent);
-            border-radius: 50%;
-            pointer-events: none;
-            opacity: 0;
-        `;
-
-        this.meteors.push(meteor);
-        this.container.appendChild(meteor);
-    }
-
-    startTwinkling() {
-        this.stars.forEach((star, index) => {
-            // 为每个星星设置不同的闪烁动画
-            star.style.animation = `twinkle ${Math.random() * 4 + 2}s ease-in-out infinite`;
-            star.style.animationDelay = `${Math.random() * 5}s`;
-        });
-    }
-
-    startMeteorShower() {
-        this.meteors.forEach((meteor, index) => {
-            setTimeout(() => {
-                this.animateMeteor(meteor);
-            }, index * 8000 + Math.random() * 5000); // 每8-13秒发射一颗流星
-        });
-    }
-
-    animateMeteor(meteor) {
-        // 重置流星位置
-        meteor.style.left = `${Math.random() * 120 - 20}%`;
-        meteor.style.top = `${Math.random() * 30}%`;
-        meteor.style.opacity = '0';
-
-        // 开始动画
-        setTimeout(() => {
-            meteor.style.transition = 'all 2s linear';
-            meteor.style.opacity = '1';
-            meteor.style.left = `${parseFloat(meteor.style.left) + 30}%`;
-            meteor.style.top = `${parseFloat(meteor.style.top) + 40}%`;
-            meteor.style.width = '200px';
-            meteor.style.height = '1px';
-            meteor.style.background = 'linear-gradient(45deg, rgba(255,255,255,0.8), transparent)';
-            meteor.style.boxShadow = '0 0 20px rgba(255,255,255,0.6)';
-
-            // 动画结束后重置
-            setTimeout(() => {
-                meteor.style.transition = 'none';
-                meteor.style.width = '2px';
-                meteor.style.height = '2px';
-                meteor.style.boxShadow = 'none';
-                meteor.style.opacity = '0';
-            }, 2000);
-        }, 100);
-
-        // 循环动画
-        setTimeout(() => {
-            this.animateMeteor(meteor);
-        }, 10000 + Math.random() * 5000);
-    }
+function stopEnergyLoop() {
+  if (energyRaf) cancelAnimationFrame(energyRaf);
+  energyRaf = 0;
+  lastEnergyTs = 0;
 }
-
-// ===== 时间背景管理器 =====
-class TimeBasedBackground {
-    constructor() {
-        this.updateInterval = null;
-        this.init();
-    }
-
-    init() {
-        this.updateBackground();
-        // 每分钟更新一次背景
-        this.updateInterval = setInterval(() => {
-            this.updateBackground();
-        }, 60000);
-
-        // 页面可见性变化时更新
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden) {
-                this.updateBackground();
-            }
-        });
-    }
-
-    updateBackground() {
-        const now = new Date();
-        const hour = now.getHours();
-        const timeOfDay = this.getTimeOfDay(hour);
-
-        const gradient = this.getGradientForTime(timeOfDay, hour);
-        document.body.style.background = gradient;
-    }
-
-    getTimeOfDay(hour) {
-        if (hour >= 5 && hour < 12) return 'morning';
-        if (hour >= 12 && hour < 17) return 'afternoon';
-        if (hour >= 17 && hour < 21) return 'evening';
-        return 'night';
-    }
-
-    getGradientForTime(timeOfDay, hour) {
-        switch (timeOfDay) {
-            case 'morning':
-                // 早晨：浅蓝色星空
-                return `linear-gradient(180deg,
-                    #1e3c72 0%,
-                    #2a5298 25%,
-                    #3a7bd5 50%,
-                    #00d2d3 75%,
-                    #54a0ff 100%)`;
-
-            case 'afternoon':
-                // 下午：深蓝色星空
-                return `linear-gradient(180deg,
-                    #0c0c0c 0%,
-                    #1a1a2e 25%,
-                    #16213e 50%,
-                    #0f3460 75%,
-                    #1a1a2e 100%)`;
-
-            case 'evening':
-                // 傍晚：紫色星空
-                return `linear-gradient(180deg,
-                    #2c1810 0%,
-                    #4a0e4e 25%,
-                    #642b73 50%,
-                    #8b5cf6 75%,
-                    #4c1d95 100%)`;
-
-            case 'night':
-                // 夜晚：深紫色星空
-                return `linear-gradient(180deg,
-                    #0f0f23 0%,
-                    #1a1a2e 25%,
-                    #16213e 50%,
-                    #0f3460 75%,
-                    #000000 100%)`;
-
-            default:
-                return `linear-gradient(180deg, #0c0c0c 0%, #1a1a2e 25%, #16213e 50%, #0f3460 75%, #1a1a2e 100%)`;
-        }
-    }
-
-    destroy() {
-        if (this.updateInterval) {
-            clearInterval(this.updateInterval);
-        }
-    }
+function energyLoop(ts) {
+  const dt = lastEnergyTs ? Math.min((ts - lastEnergyTs) / 1000, 0.1) : 1 / 60;
+  lastEnergyTs = ts;
+  engine.tick(dt);
+  if (sky.gl) sky.setAudioEnergy(engine.energy);
+  if (engine.playing || engine.energy > 0.002) {
+    energyRaf = requestAnimationFrame(energyLoop);
+  } else {
+    energyRaf = 0;
+    if (sky.gl) sky.setAudioEnergy(0);
+  }
 }
-
-// ===== 响应式管理器 =====
-class ResponsiveManager {
-    constructor() {
-        this.breakpoints = {
-            mobile: 480,
-            tablet: 768,
-            desktop: 1024
-        };
-        this.currentBreakpoint = this.getCurrentBreakpoint();
-        this.init();
-    }
-
-    init() {
-        window.addEventListener('resize', () => {
-            const newBreakpoint = this.getCurrentBreakpoint();
-            if (newBreakpoint !== this.currentBreakpoint) {
-                this.currentBreakpoint = newBreakpoint;
-                this.handleBreakpointChange(newBreakpoint);
-            }
-        });
-    }
-
-    getCurrentBreakpoint() {
-        const width = window.innerWidth;
-        if (width <= this.breakpoints.mobile) return 'mobile';
-        if (width <= this.breakpoints.tablet) return 'tablet';
-        return 'desktop';
-    }
-
-    handleBreakpointChange(breakpoint) {
-        console.log(`Breakpoint changed to: ${breakpoint}`);
-        // 可以在这里添加断点变化时的处理逻辑
-    }
-}
-
-// ===== 主应用类 =====
-class LoveApp {
-    constructor() {
-        this.audioManager = null;
-        this.backgroundDecoration = null;
-        this.timeBasedBackground = null;
-        this.responsiveManager = null;
-        this.init();
-    }
-
-    init() {
-        PerformanceMonitor.measure('App Initialization', () => {
-            this.setupAudio();
-            this.setupDecorations();
-            this.setupInteractions();
-            this.setupResponsive();
-            this.setupPerformanceOptimizations();
-        });
-    }
-
-    setupAudio() {
-        this.audioManager = new AudioManager('bgMusic');
-
-        const audioToggle = document.getElementById('audioToggle');
-        if (audioToggle) {
-            audioToggle.addEventListener('click', () => {
-                this.audioManager.toggle();
-            });
-        }
-    }
-
-    setupDecorations() {
-        this.backgroundDecoration = new BackgroundDecoration('backgroundDecoration');
-        this.timeBasedBackground = new TimeBasedBackground();
-    }
-
-    setupInteractions() {
-        // 交互功能已移除，保持简洁设计
-    }
-
-    setupResponsive() {
-        this.responsiveManager = new ResponsiveManager();
-    }
-
-    setupPerformanceOptimizations() {
-        // 页面可见性API - 当页面不可见时暂停动画
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-                // 页面不可见时可以暂停一些动画
-                console.log('Page hidden - can pause animations');
-            } else {
-                // 页面重新可见
-                console.log('Page visible - resume animations');
-            }
-        });
-
-        // 内存管理 - 清理事件监听器
-        window.addEventListener('beforeunload', () => {
-            this.cleanup();
-        });
-    }
-
-    cleanup() {
-        // 清理资源
-        if (this.audioManager) {
-            this.audioManager.pause();
-        }
-    }
-}
-
-// ===== 应用启动 =====
-document.addEventListener('DOMContentLoaded', () => {
-    // 检查浏览器支持
-    if (!('IntersectionObserver' in window) ||
-        !('requestAnimationFrame' in window)) {
-        console.warn('Some modern features may not be supported in this browser');
-    }
-
-    // 启动应用
-    new LoveApp();
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopEnergyLoop();
+  else if (engine.playing || engine.energy > 0.002) startEnergyLoop();
 });
 
-// ===== CSS 动画支持 =====
-const style = document.createElement('style');
-style.textContent = `
-    @keyframes ripple {
-        0% {
-            transform: scale(0);
-            opacity: 1;
-        }
-        100% {
-            transform: scale(4);
-            opacity: 0;
-        }
-    }
+/* ===================== 指针 / 陀螺仪视差 ===================== */
+if (sky.gl) {
+  if (!coarse) {
+    addEventListener('pointermove', rafThrottle((e) => {
+      sky.setPointer((e.clientX / innerWidth) * 2 - 1, (e.clientY / innerHeight) * 2 - 1);
+      layer.pushTrail(e.clientX, e.clientY);
+    }), { passive: true });
+  }
+  const onOrientation = (e) => {
+    if (e.beta === null || e.gamma === null) return;
+    sky.setPointer(clamp(e.gamma / 40, -1, 1), clamp((e.beta - 45) / 40, -1, 1));
+  };
+  let orientationBound = false;
+  const bindOrientation = () => {
+    if (orientationBound) return;
+    orientationBound = true;
+    addEventListener('deviceorientation', onOrientation, { passive: true });
+  };
+  const orientation = window.DeviceOrientationEvent;
+  if (typeof orientation?.requestPermission !== 'function') {
+    bindOrientation();
+  } else {
+    const requestOrientation = async () => {
+      stage.removeEventListener('pointerdown', requestOrientation);
+      audioFab.removeEventListener('pointerdown', requestOrientation);
+      try {
+        if (await orientation.requestPermission() === 'granted') bindOrientation();
+      } catch { /* 用户拒绝或平台不允许 */ }
+    };
+    stage.addEventListener('pointerdown', requestOrientation, { passive: true });
+    audioFab.addEventListener('pointerdown', requestOrientation, { passive: true });
+  }
+}
 
-    .bg-element {
-        will-change: transform;
-        
-    }
-`;
-document.head.appendChild(style);
+/* ===================== 交互：轻触星光 / 三连击流星雨 ===================== */
+{
+  let taps = [];
+  let storming = false;
 
+  const storm = () => {
+    if (storming) return;
+    storming = true;
+    sky.gl && sky.meteorStorm(true);
+    layer.meteorShower();
+    haptic([8, 40, 8]);
+    setTimeout(() => {
+      sky.gl && sky.meteorStorm(false);
+      storming = false;
+    }, 5200);
+  };
+
+  stage.addEventListener('pointerdown', (e) => {
+    burstAt(e.clientX, e.clientY, { power: 0.85 });
+    haptic(4);
+
+    const now = performance.now();
+    taps = taps.filter((t) => now - t < 850);
+    taps.push(now);
+    if (taps.length >= 3) {
+      taps = [];
+      storm();
+    }
+  }, { passive: true });
+}
+
+/* ===================== 调试 / 演示钩子 ===================== */
+const DEBUG = params.get('debug') === '1';
+/* ?demo=storm —— 加载 0.8s 后自动来一场流星雨（也用于自检流星管线） */
+if (params.get('demo') === 'storm') {
+  setTimeout(() => {
+    layer.meteorShower(20, 4);
+    if (sky.gl) sky.meteorStorm(true);
+  }, 800);
+  setTimeout(() => { if (sky.gl) sky.meteorStorm(false); }, 6200);
+}
+if (DEBUG) {
+  setInterval(() => {
+    const m0 = layer.meteors[0];
+    document.title = `G${sky.gl ? '✓' : '✗'}L${layer.running ? '▶' : '⏸'}q${layer.meteorQueue}w${layer.meteorWindow?.toFixed(1)}m${layer.meteors.length}b${layer.bursts.length}` +
+      (m0 ? ` M@${Math.round(m0.x)},${Math.round(m0.y)}v${Math.round(m0.vx)},${Math.round(m0.vy)}a${Math.round(m0.life * 100)}/${Math.round(m0.maxLife * 100)}` : '');
+  }, 300);
+}
+
+/* ===================== 自动时段调色板 ===================== */
+if (sky.gl) {
+  const apply = () => sky.setPalette(autoPaletteForHour(new Date().getHours()));
+  apply();
+  setInterval(apply, 5 * 60_000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) apply();
+  });
+}
+
+/* ===================== Service Worker ===================== */
+if ('serviceWorker' in navigator &&
+    (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) {
+  addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => { /* 静默 */ });
+  });
+}

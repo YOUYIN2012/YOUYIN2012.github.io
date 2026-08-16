@@ -1,0 +1,18 @@
+{
+  "name": "爱意随风起",
+  "short_name": "爱意随风起",
+  "description": "愿时光温柔，愿你被爱。一片用代码写就的星河。",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0a081e",
+  "theme_color": "#0a081e",
+  "categories": ["lifestyle", "entertainment"],
+  "icons": [
+    { "src": "static/images/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "static/images/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "static/images/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

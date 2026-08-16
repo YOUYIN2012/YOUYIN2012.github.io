@@ -1,50 +1,60 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="description" content="A minimalist love expression">
-    <meta name="theme-color" content="#ff6b9d">
-    <title>爱意随风起</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎁</text></svg>">
-    <link rel="stylesheet" href="static/css/style.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+
+  <title>爱意随风起</title>
+  <meta name="description" content="一片用前沿 Web 技术写就的静谧星河：WebGL 着色器天空、交互星光、频谱驱动的极光与流星。">
+  <meta name="author" content="爱意随风起">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#060b1e">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="爱意随风起">
+  <meta name="format-detection" content="telephone=no">
+
+  <link rel="canonical" href="https://xn--kiv3tqg.xn--6qq986b3xl/">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="static/images/apple-touch-icon.png">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="爱意随风起">
+  <meta property="og:title" content="爱意随风起">
+  <meta property="og:description" content="一片用代码写就的静谧星河。">
+  <meta property="og:url" content="https://xn--kiv3tqg.xn--6qq986b3xl/">
+  <meta property="og:image" content="https://xn--kiv3tqg.xn--6qq986b3xl/static/images/og.png">
+  <meta property="og:locale" content="zh_CN">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://xn--kiv3tqg.xn--6qq986b3xl/static/images/og.png">
+
+  <link rel="modulepreload" href="static/js/main.js">
+  <link rel="stylesheet" href="static/css/main.css">
+
+  <script type="application/ld+json">
+  { "@context": "https://schema.org", "@type": "WebSite", "name": "爱意随风起", "url": "https://xn--kiv3tqg.xn--6qq986b3xl/", "inLanguage": "zh-CN" }
+  </script>
 </head>
+
 <body>
-    <!-- 背景装饰 -->
-    <div class="background-decoration" id="backgroundDecoration">
-        <!-- 月亮装饰 -->
-        <div class="moon-decoration">
-            <div class="moon"></div>
-            <div class="moon-glow"></div>
-        </div>
-    </div>
+  <!-- 底层：WebGL2 着色器天空（渐变 / 极光 / 月亮 / 流星） -->
+  <canvas id="sky" class="layer sky" aria-hidden="true"></canvas>
 
-    <!-- 主容器 -->
-    <main class="main-container">
-        <!-- 标题 -->
-        <!-- <h1 class="page-title">Forever</h1> -->
+  <!-- 上层：交互星空（连线星座 / 粒子 / 拖尾），唯一指针交互层 -->
+  <canvas id="stage" class="layer stage" role="img" aria-label="交互星图：轻触有星光回应，三连击会有流星雨"></canvas>
 
-        <!-- 副标题 -->
-        <p class="page-subtitle">愿时光温柔，愿你被爱</p>
+  <!-- 音乐球：轻触播放/暂停 · 双击下一首 · 长按上一首（环形频谱可视化） -->
+  <button id="audioFab" class="fab" aria-label="播放或暂停背景音乐（双击下一首，长按上一首）" aria-pressed="false">
+    <canvas id="fabViz" class="fab-viz" aria-hidden="true"></canvas>
+    <svg class="fab-icon icon-play" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+    <svg class="fab-icon icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+  </button>
 
-        <!-- 音频控制 -->
-        <button class="audio-toggle" id="audioToggle" aria-label="Toggle background music">
-            <svg class="audio-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M9 21l6-6H21l-6-6H9v12z"/>
-                <path d="M3 9v6l6-3-6-3z"/>
-            </svg>
-        </button>
-    </main>
+  <audio id="audio" preload="none"></audio>
+  <noscript></noscript>
 
-    <!-- 背景音乐 -->
-    <audio id="bgMusic" preload="none" loop>
-        <source src="static/music/Ed Sheeran-Thinking Out Loud.mp3" type="audio/mp3">
-    </audio>
-
-    <!-- 现代JavaScript -->
-    <script type="module" src="static/js/main.js"></script>
+  <script type="module" src="static/js/main.js"></script>
 </body>
 </html>
