@@ -12,7 +12,6 @@
 const TRACKS = [
   { title: 'Thinking Out Loud', artist: 'Ed Sheeran', src: 'static/music/Ed Sheeran-Thinking Out Loud.mp3' },
   { title: '晴天', artist: '周杰伦', src: 'static/music/周杰伦 - 晴天.mp3' },
-  { title: '再遇见', artist: '苏打绿', src: 'static/music/苏打绿 - 再遇见.mp3' },
   { title: '少一点天分', artist: '孙盛希', src: 'static/music/孙盛希 - 少一点天分.mp3' },
 ];
 
