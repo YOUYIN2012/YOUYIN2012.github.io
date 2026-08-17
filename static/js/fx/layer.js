@@ -45,6 +45,9 @@ export class Layer {
     this.trail = [];
     this.meteorQueue = 0;
     this.meteorWindow = 0;
+    this.meteorDuration = 0;
+    this.meteorElapsed = 0;
+    this.meteorSchedule = [];
     this.lastTs = 0;
     this.w = 0; this.h = 0;
     this.frame = this.loop.bind(this);
@@ -119,12 +122,56 @@ export class Layer {
   }
 
   /** 流星雨（细而 crisp 的长划） */
-  meteorShower(count = this.coarse ? 9 : 14, duration = 4) {
+  meteorShower(count, duration = 4) {
     if (this.reduced) return;
-    this.meteorQueue = count;
-    this.meteorWindow = duration;
-    this.meteorDuration = duration;
+    const base = this.coarse ? 9 : 14;
+    const total = count ?? Math.round(rand(base * 0.8, base * 1.3));
+    const actualDuration = count === undefined ? duration * rand(0.88, 1.14) : duration;
+
+    // 2–4 个随机密集区混合少量散点，既不均匀排队，也不会漏发。
+    const clusterCount = Math.floor(rand(2, 5));
+    const clusters = Array.from({ length: clusterCount }, () => rand(0.12, 0.88) * actualDuration);
+    this.meteorSchedule = Array.from({ length: total }, () => {
+      const time = Math.random() < 0.72
+        ? pick(clusters) + rand(-0.38, 0.38)
+        : rand(0.04, actualDuration);
+      return clamp(time, 0.04, actualDuration);
+    }).sort((a, b) => a - b);
+
+    this.meteorQueue = total;
+    this.meteorWindow = actualDuration;
+    this.meteorDuration = actualDuration;
+    this.meteorElapsed = 0;
     this.start();
+  }
+
+  /** 生成一颗方向受约束、外观随机的流星。Canvas y 向下，因此 vx/vy 始终为正。 */
+  spawnMeteor() {
+    const fromTop = Math.random() < 0.72;
+    const angle = rand(22, 50) * Math.PI / 180;
+    const speed = rand(420, 780) * (this.coarse ? 0.9 : 1);
+    const colors = pick([
+      [166, 205, 255],
+      [188, 218, 255],
+      [154, 215, 246],
+      [202, 222, 255],
+    ]);
+
+    this.meteors.push({
+      x: fromTop ? rand(-0.12, 0.72) * this.w : rand(-150, -20),
+      y: fromTop ? rand(-90, -8) : rand(-0.04, 0.42) * this.h,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 0,
+      maxLife: rand(0.78, 1.42),
+      len: speed * rand(0.16, 0.31),
+      width: rand(0.9, 2.25),
+      headScale: rand(0.92, 1.12),
+      brightness: rand(0.72, 1.0),
+      shimmer: rand(8, 18),
+      phase: rand(0, Math.PI * 2),
+      colors,
+    });
   }
 
   /** 光标拖尾（细指针设备，按距离节流） */
@@ -203,21 +250,17 @@ export class Layer {
 
     /* 流星 */
     if (this.meteorQueue > 0 && this.meteorWindow > 0) {
-      this.meteorWindow -= dt;
-      if (Math.random() < dt * (this.meteorQueue / Math.max(this.meteorDuration, 0.1)) * 2.6) {
+      this.meteorElapsed += dt;
+      this.meteorWindow = Math.max(0, this.meteorDuration - this.meteorElapsed);
+      while (this.meteorSchedule.length && this.meteorSchedule[0] <= this.meteorElapsed) {
+        this.meteorSchedule.shift();
         this.meteorQueue--;
-        // 统一方向：左上 → 右下（与着色器流星一致）
-        this.meteors.push({
-          x: rand(-0.05, 0.55) * w,
-          y: rand(-30, h * 0.18),
-          vx: rand(380, 680),
-          vy: rand(200, 360),
-          life: 0, maxLife: rand(0.8, 1.3),
-          len: rand(90, 190),
-        });
+        this.spawnMeteor();
       }
-    } else if (this.meteorWindow <= 0) {
+    } else if (this.meteorQueue <= 0 || this.meteorWindow <= 0) {
       this.meteorQueue = 0;
+      this.meteorWindow = 0;
+      this.meteorSchedule.length = 0;
     }
     for (let i = this.meteors.length - 1; i >= 0; i--) {
       const m = this.meteors[i];
@@ -226,18 +269,21 @@ export class Layer {
       m.x += m.vx * dt;
       m.y += m.vy * dt;
       const t = m.life / m.maxLife;
-      const a = Math.min(1, t / 0.12) * (1 - ((t - 0.12) / 0.88) ** 2);
+      const fade = Math.min(1, t / 0.12) * (1 - ((t - 0.12) / 0.88) ** 2);
+      const shimmer = 0.88 + 0.12 * Math.sin(m.life * m.shimmer + m.phase);
+      const a = clamp(fade * m.brightness * shimmer, 0, 1);
       const mag = Math.hypot(m.vx, m.vy) || 1;
       const ux = m.vx / mag, uy = m.vy / mag;
       const tx = m.x - ux * m.len, ty = m.y - uy * m.len;
       const nx = -uy, ny = ux;            // 法向
-      const hw = 1.6;                     // 头部半宽，向尾收拢成锥形
+      const hw = m.width;                 // 头部半宽，向尾收拢成锥形
+      const [r, g, b] = m.colors;
       // 锥形拖尾：三角带 + 尾暗头亮渐变
       const grad = ctx.createLinearGradient(tx, ty, m.x, m.y);
-      grad.addColorStop(0, 'rgba(160,200,255,0)');
-      grad.addColorStop(0.45, `rgba(175,212,255,${0.38 * a})`);
-      grad.addColorStop(0.85, `rgba(220,238,255,${0.75 * a})`);
-      grad.addColorStop(1, `rgba(248,252,255,${0.95 * a})`);
+      grad.addColorStop(0, `rgba(${r},${g},${b},0)`);
+      grad.addColorStop(0.45, `rgba(${r},${g},${b},${0.36 * a})`);
+      grad.addColorStop(0.85, `rgba(${Math.min(255, r + 38)},${Math.min(255, g + 24)},255,${0.74 * a})`);
+      grad.addColorStop(1, `rgba(250,253,255,${0.96 * a})`);
       ctx.fillStyle = grad;
       ctx.beginPath();
       ctx.moveTo(m.x + nx * hw, m.y + ny * hw);
@@ -248,7 +294,7 @@ export class Layer {
       // 头部亮点
       ctx.fillStyle = `rgba(250,253,255,${a})`;
       ctx.beginPath();
-      ctx.arc(m.x, m.y, 1.9, 0, Math.PI * 2);
+      ctx.arc(m.x, m.y, m.width * m.headScale, 0, Math.PI * 2);
       ctx.fill();
     }
 

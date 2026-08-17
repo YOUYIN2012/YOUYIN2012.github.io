@@ -80,11 +80,11 @@ vec3 stars(vec2 p, float grid, float density, float t) {
       // 像素级小星：1.2–2.8 设备像素半径，与分辨率无关地「小」
       float size = (1.2 + 1.6 * hash11(rnd.x * 91.7)) / uRes.y;
       float tw = 0.72 + 0.28 * sin(t * (0.5 + rnd.y * 1.6) + rnd.x * 6.28);
-      float m = smoothstep(size, size * 0.4, d) * tw;   // 紧致边缘 → crisp
+      float m = (1.0 - smoothstep(size * 0.4, size, d)) * tw; // 紧致边缘 → crisp
       float bright = step(0.96, hash11(rnd.y * 57.3));
       vec2 dir = normalize(p - sp + 1e-5);
       float cross = (max(0.0, 1.0 - abs(dir.x) * 14.0) + max(0.0, 1.0 - abs(dir.y) * 14.0))
-                  * smoothstep(size * 7.0, size * 2.0, d);
+                  * (1.0 - smoothstep(size * 2.0, size * 7.0, d));
       m += bright * cross * 0.5;
       col += mix(vec3(0.88, 0.93, 1.0), vec3(0.75, 0.85, 1.0), rnd.y) * m;
     }
@@ -92,31 +92,51 @@ vec3 stars(vec2 p, float grid, float density, float t) {
   return col;
 }
 
-vec3 shootingStar(vec2 p, float t, float period) {
-  float seg = floor(t / period);
-  float phase = fract(t / period);
-  // 随机性：约 12% 的段跳过；每段的速度与行程独立随机
-  if (hash11(seg * 5.997) < 0.12) return vec3(0.0);
-  float speedMul = mix(0.8, 1.45, hash11(seg * 3.717));
-  float travelLen = mix(0.85, 1.3, hash11(seg * 7.313));
-  float r1 = hash11(seg * 12.9898);
-  float r2 = hash11(seg * 78.233);
-  float r3 = hash11(seg * 37.719);
-  // 统一方向：左上 → 右下（着色器坐标 y 向上，故 dy 为负）
-  vec2 start = vec2(mix(-0.15, 0.9, r1), mix(0.45, 1.0, r2));
-  vec2 dir = normalize(vec2(mix(0.65, 1.0, r3), -mix(0.42, 0.7, r2)));
-  vec2 pos = start + dir * phase * 1.8 * speedMul * travelLen;
+vec3 shootingStar(vec2 p, float t, float period, float seed) {
+  // 每条轨道使用独立时间偏移与随机种子，避免风暴轨道同步出现。
+  float localT = t + seed * 2.731;
+  float seg = floor(localT / period);
+  float phase = fract(localT / period);
+  float key = seg + seed * 41.0;
+  float r1 = hash11(key * 12.9898);
+  float r2 = hash11(key * 78.233);
+  float r3 = hash11(key * 37.719);
+  float r4 = hash11(key * 19.193);
+  float r5 = hash11(key * 53.117);
+  float r6 = hash11(key * 91.731);
+
+  // 约 14% 的时段留空，让节奏保持稀疏而非机械等间隔。
+  if (r6 < 0.14) return vec3(0.0);
+
+  float aspect = uRes.x / uRes.y;
+  // 约 72% 从上边缘进入，其余从左边缘进入；两种入口最终都向右下移动。
+  vec2 topStart = vec2(mix(-0.48 * aspect, 0.30 * aspect, r1), mix(0.48, 0.62, r2));
+  vec2 leftStart = vec2(mix(-0.62 * aspect, -0.48 * aspect, r1), mix(0.08, 0.48, r2));
+  vec2 start = mix(leftStart, topStart, step(0.28, r5));
+
+  // 着色器坐标 y 向上：x 始终为正、y 始终为负，即屏幕上的左上 → 右下。
+  vec2 dir = normalize(vec2(mix(0.68, 1.0, r3), -mix(0.38, 0.82, r4)));
+  float speed = mix(1.35, 2.25, r5);
+  float travel = mix(0.85, 1.30, r6);
+  vec2 pos = start + dir * phase * speed * travel;
+
+  float visibility = smoothstep(0.0, 0.07, phase)
+                   * (1.0 - smoothstep(0.62, 0.96, phase));
+  float headRadius = mix(0.0022, 0.0042, r2);
   float dHead = distance(p, pos);
-  float head = (1.0 - smoothstep(0.0, 0.0032, dHead))
-             * smoothstep(0.0, 0.1, phase) * smoothstep(0.5, 0.18, phase);
-  vec2 pa = pos - dir * 0.14, pb = pos;   // pa=尾 pb=头
+  float head = (1.0 - smoothstep(headRadius * 0.25, headRadius, dHead)) * visibility;
+
+  float tailLen = mix(0.09, 0.23, r1);
+  vec2 pa = pos - dir * tailLen, pb = pos;   // pa=尾 pb=头
   vec2 ap = p - pa, ab = pb - pa;
   float h = clamp(dot(ap, ab) / dot(ab, ab), 0.0, 1.0);  // 0=尾 1=头
   float dLine = length(ap - ab * h);
-  float width = mix(0.0010, 0.0038, h);   // 锥形拖尾：头粗尾细
-  float trail = (1.0 - smoothstep(0.0, width, dLine)) * pow(h, 1.4)
-              * smoothstep(0.0, 0.12, phase) * smoothstep(0.55, 0.22, phase);
-  return vec3(0.85, 0.92, 1.0) * (head * 1.6 + trail * 0.85);
+  float width = mix(0.0006, mix(0.0026, 0.0042, r3), h); // 头粗尾细
+  float trail = (1.0 - smoothstep(width * 0.35, width, dLine))
+              * pow(h, mix(1.15, 1.75, r4)) * visibility;
+  vec3 color = mix(vec3(0.72, 0.86, 1.0), vec3(0.92, 0.96, 1.0), r2);
+  float brightness = mix(0.72, 1.18, r5);
+  return color * brightness * (head * 1.55 + trail * 0.82);
 }
 
 void main() {
@@ -139,7 +159,7 @@ void main() {
   float band = 0.5 + 0.5 * sin(warp * 4.2 + uv.x * 2.4 + t * 0.05);
   float mask = smoothstep(0.18, 0.62, warp)
              * smoothstep(0.10, 0.50, band)
-             * smoothstep(0.06, 0.42, grad) * smoothstep(1.0, 0.62, grad);
+             * smoothstep(0.06, 0.42, grad) * (1.0 - smoothstep(0.62, 1.0, grad));
   vec3 aurora = mix(uAuroraA, uAuroraB, 0.5 + 0.5 * sin(warp * 2.6 + t * 0.04));
   sky += aurora * mask * (0.10 + uBeat * 0.12);
 
@@ -151,7 +171,7 @@ void main() {
   float md = length(p - moonPos);
   float moonR = 0.075;
   float aa = 1.5 / uRes.y;
-  float moon = smoothstep(moonR + aa, moonR - aa, md);
+  float moon = 1.0 - smoothstep(moonR - aa, moonR + aa, md);
   if (moon > 0.0) {
     float shade = fbm((p - moonPos) * 7.0, 2);
     moon *= 0.88 + 0.12 * shade;
@@ -161,15 +181,17 @@ void main() {
   sky += uMoonCol * halo;
   sky += uMoonCol * moon;
 
-  /* 流星：平时约 4.5s 一颗（随机跳过/变速），风暴时三轨叠加 */
-  sky += shootingStar(p + drift * 4.0, t, mix(4.5, 1.4, uStorm));
+  /* 固定周期保证风暴开关不重算相位；风暴轨道仅改变数量与亮度。 */
+  vec2 meteorP = p + drift * 4.0;
+  sky += shootingStar(meteorP, t, 4.5, 1.0);
   if (uStorm > 0.05) {
-    sky += shootingStar(p * 1.25 + 7.7, t * 1.2, 1.15) * 0.65 * uStorm;
-    sky += shootingStar(p * 0.85 + 3.3, t * 0.9, 1.85) * 0.5 * uStorm;
+    sky += shootingStar(meteorP, t, 1.05, 11.0) * 0.72 * uStorm;
+    sky += shootingStar(meteorP, t, 1.38, 23.0) * 0.62 * uStorm;
+    sky += shootingStar(meteorP, t, 1.82, 37.0) * 0.52 * uStorm;
   }
 
   /* 轻暗角 + 抖动去色带（不糊化画面） */
-  float vig = smoothstep(1.3, 0.4, length(p * vec2(0.82, 1.05)));
+  float vig = 1.0 - smoothstep(0.4, 1.3, length(p * vec2(0.82, 1.05)));
   sky *= mix(0.80, 1.0, vig);
   sky += (hash21(frag + fract(t)) - 0.5) / 255.0 * 1.6;
 

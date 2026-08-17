@@ -6,7 +6,7 @@
  */
 
 const CACHE_PREFIX = 'love-sky';
-const VERSION = '20260817-1';
+const VERSION = '20260818-1';
 const CORE_CACHE = `${CACHE_PREFIX}-core-${VERSION}`;
 const RUNTIME_CACHE = `${CACHE_PREFIX}-runtime-${VERSION}`;
 
