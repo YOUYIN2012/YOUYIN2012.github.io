@@ -12,9 +12,10 @@
 const musicUrl = (name) => new URL(`../../music/${name}`, import.meta.url).href;
 
 const TRACKS = [
-  { title: 'Thinking Out Loud', artist: 'Ed Sheeran', src: musicUrl('Ed Sheeran-Thinking Out Loud.mp3') },
-  { title: '晴天', artist: '周杰伦', src: musicUrl('周杰伦 - 晴天.mp3') },
-  { title: '少一点天分', artist: '孙盛希', src: musicUrl('孙盛希 - 少一点天分.mp3') },
+  // { title: 'Thinking Out Loud', artist: 'Ed Sheeran', src: musicUrl('Ed Sheeran-Thinking Out Loud.mp3') },
+  // { title: '晴天', artist: '周杰伦', src: musicUrl('周杰伦 - 晴天.mp3') },
+  // { title: '少一点天分', artist: '孙盛希', src: musicUrl('孙盛希 - 少一点天分.mp3') },
+  { title: 'Possible Dreams', artist: 'Eugenio Mininni', src: musicUrl('Possible Dreams-Eugenio Mininni.mp3') },
 ];
 
 const ARTWORK = [{
