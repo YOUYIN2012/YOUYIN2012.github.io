@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; script-src 'self' 'sha256-5Yxixw2h67BTJPioXZkn8iSi+Npc7PkcIAfGJvo5xyA='; style-src 'self'; img-src 'self'; media-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; upgrade-insecure-requests">
 
   <title>爱意随风起</title>
   <meta name="description" content="一片用前沿 Web 技术写就的静谧星河：WebGL 着色器天空、交互星光、频谱驱动的极光与流星。">
@@ -46,14 +48,18 @@
   <canvas id="stage" class="layer stage" role="img" aria-label="交互星图：轻触有星光回应，三连击会有流星雨"></canvas>
 
   <!-- 音乐球：轻触播放/暂停 · 双击下一首 · 长按上一首（环形频谱可视化） -->
-  <button id="audioFab" class="fab" aria-label="播放或暂停背景音乐（双击下一首，长按上一首）" aria-pressed="false">
+  <button id="audioFab" class="fab" type="button" aria-label="播放背景音乐（双击下一首，长按上一首）" aria-pressed="false">
     <canvas id="fabViz" class="fab-viz" aria-hidden="true"></canvas>
     <svg class="fab-icon icon-play" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
     <svg class="fab-icon icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
   </button>
 
+  <!-- 键盘与辅助技术可直接触发流星雨；仅在获得焦点时显示。 -->
+  <button id="stormButton" class="a11y-action" type="button">触发流星雨</button>
+  <p id="status" class="sr-only" role="status" aria-live="polite"></p>
+
   <audio id="audio" preload="none"></audio>
-  <noscript></noscript>
+  <noscript><p class="fallback-message">请启用 JavaScript 以观看星河并使用音乐与流星交互。</p></noscript>
 
   <script type="module" src="static/js/main.js"></script>
 </body>

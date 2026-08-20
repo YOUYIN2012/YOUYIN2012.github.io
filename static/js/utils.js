@@ -51,15 +51,27 @@ export function rafThrottle(fn) {
 export const mixRGB = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
 
 /**
- * FPS 看门狗：持续采样帧耗时，超阈值时触发降级回调。
- * 用于多端自适应画质。
+ * FPS 看门狗：持续采样帧耗时，过载时逐级降画质，稳定后带迟滞地恢复。
  */
 export class FpsGuard {
-  constructor({ sampleFrames = 70, badMs = 34, onDegrade, coolDownMs = 15000, maxLevel = 3 } = {}) {
-    Object.assign(this, { sampleFrames, badMs, onDegrade, coolDownMs, maxLevel });
+  constructor({
+    sampleFrames = 70,
+    badMs = 34,
+    onDegrade,
+    onRecover,
+    coolDownMs = 15000,
+    recoverSamples = 6,
+    recoverRatio = 0.68,
+    maxLevel = 3,
+  } = {}) {
+    Object.assign(this, {
+      sampleFrames, badMs, onDegrade, onRecover, coolDownMs,
+      recoverSamples, recoverRatio, maxLevel,
+    });
     this.frames = 0;
     this.bad = 0;
     this.total = 0;
+    this.goodSamples = 0;
     this.lastTs = 0;
     this.lastDegradeAt = 0;
     this.level = 0; // 0 满画质，随后按 maxLevel 逐级降档
@@ -75,12 +87,27 @@ export class FpsGuard {
     if (++this.frames >= this.sampleFrames) {
       const avg = this.total / this.frames;
       const badRatio = this.bad / this.frames;
-      if (this.level < this.maxLevel &&
-          (avg > this.badMs || badRatio > 0.25) &&
+      const struggling = avg > this.badMs || badRatio > 0.25;
+      if (struggling) {
+        this.goodSamples = 0;
+      }
+      if (this.level < this.maxLevel && struggling &&
           Date.now() - this.lastDegradeAt > this.coolDownMs) {
         this.level++;
         this.lastDegradeAt = Date.now();
         this.onDegrade?.(this.level);
+      } else if (this.level > 0 && !struggling &&
+                 avg < this.badMs * this.recoverRatio && badRatio < 0.05) {
+        this.goodSamples++;
+        if (this.goodSamples >= this.recoverSamples &&
+            Date.now() - this.lastDegradeAt > this.coolDownMs * 2) {
+          this.level--;
+          this.goodSamples = 0;
+          this.lastDegradeAt = Date.now();
+          this.onRecover?.(this.level);
+        }
+      } else {
+        this.goodSamples = 0;
       }
       this.resetSample();
     }
@@ -92,6 +119,7 @@ export class FpsGuard {
 
   reset() {
     this.resetSample();
+    this.goodSamples = 0;
     this.lastTs = 0;
   }
 }

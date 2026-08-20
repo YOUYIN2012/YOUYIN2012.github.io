@@ -6,13 +6,15 @@
  *
  * 每帧 tick() 采样一次并计算 RMS 能量（驱动极光/月晕/频谱环）。
  * 附加：Media Session 锁屏控制 + 静态封面、播放时 Wake Lock、
- * 自动连播、错误静默兜底。无任何文字 UI 依赖。
+ * 自动连播、错误回调兜底。无任何文字 UI 依赖。
  */
 
+const musicUrl = (name) => new URL(`../../music/${name}`, import.meta.url).href;
+
 const TRACKS = [
-  { title: 'Thinking Out Loud', artist: 'Ed Sheeran', src: 'static/music/Ed Sheeran-Thinking Out Loud.mp3' },
-  { title: '晴天', artist: '周杰伦', src: 'static/music/周杰伦 - 晴天.mp3' },
-  { title: '少一点天分', artist: '孙盛希', src: 'static/music/孙盛希 - 少一点天分.mp3' },
+  { title: 'Thinking Out Loud', artist: 'Ed Sheeran', src: musicUrl('Ed Sheeran-Thinking Out Loud.mp3') },
+  { title: '晴天', artist: '周杰伦', src: musicUrl('周杰伦 - 晴天.mp3') },
+  { title: '少一点天分', artist: '孙盛希', src: musicUrl('孙盛希 - 少一点天分.mp3') },
 ];
 
 const ARTWORK = [{
@@ -28,6 +30,7 @@ export class AudioEngine {
     this.playing = false;
     this.ready = false;
     this.onState = null;
+    this.onError = null;
     this.energy = 0;        // 0..1 RMS，每帧更新
     this.wakeLock = null;
     this.transitionId = 0;
@@ -38,12 +41,7 @@ export class AudioEngine {
     this.wave = new Uint8Array(1024);
 
     this.audio.addEventListener('ended', () => this.next());
-    this.audio.addEventListener('error', () => {
-      this.playing = false;
-      this._emit();
-      this._syncSession();
-      this._releaseWakeLock();
-    });
+    this.audio.addEventListener('error', () => this._reportError(this.audio.error));
     this.audio.addEventListener('play', () => {
       this.playing = true;
       this._emit();
@@ -59,6 +57,7 @@ export class AudioEngine {
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && this.playing) this._requestWakeLock();
     });
+    addEventListener('pagehide', () => this._releaseWakeLock());
     this._initSession();
   }
 
@@ -98,7 +97,11 @@ export class AudioEngine {
     if (this.index < 0) return this.playAt(0);
     this.ensureContext();
     await this.ctx?.resume().catch(() => {});
-    try { await this.audio.play(); } catch { /* 忽略中断 */ }
+    try {
+      await this.audio.play();
+    } catch (error) {
+      if (error?.name !== 'AbortError') this._reportError(error);
+    }
   }
 
   pause() {
@@ -106,7 +109,7 @@ export class AudioEngine {
     if (this.audio.paused) this._releaseWakeLock();
   }
 
-  /** 带交叉淡出的切歌 */
+  /** 单音源淡出 → 切换 → 淡入，避免切歌爆音 */
   async playAt(i) {
     if (i < 0 || i >= this.tracks.length) return;
     const transitionId = ++this.transitionId;
@@ -118,7 +121,14 @@ export class AudioEngine {
     const start = async () => {
       if (transitionId !== this.transitionId) return false;
       this.audio.src = this.tracks[i].src;
-      try { await this.audio.play(); } catch { /* 交给 error 处理 */ }
+      try {
+        await this.audio.play();
+      } catch (error) {
+        if (transitionId === this.transitionId && error?.name !== 'AbortError') {
+          this._reportError(error);
+        }
+        return false;
+      }
       return transitionId === this.transitionId;
     };
 
@@ -182,17 +192,21 @@ export class AudioEngine {
 
   _syncSession() {
     if (!('mediaSession' in navigator) || !this.track) return;
-    const t = this.track;
-    if (this.sessionTrack !== this.index) {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: t.title,
-        artist: t.artist,
-        album: '爱意随风起',
-        artwork: ARTWORK,
-      });
-      this.sessionTrack = this.index;
+    try {
+      const t = this.track;
+      if (this.sessionTrack !== this.index && typeof MediaMetadata === 'function') {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: t.title,
+          artist: t.artist,
+          album: '爱意随风起',
+          artwork: ARTWORK,
+        });
+        this.sessionTrack = this.index;
+      }
+      navigator.mediaSession.playbackState = this.playing ? 'playing' : 'paused';
+    } catch {
+      // Media Session 是增强功能，平台实现不完整时不影响基础播放。
     }
-    navigator.mediaSession.playbackState = this.playing ? 'playing' : 'paused';
   }
 
   /* ---------- Wake Lock ---------- */
@@ -210,7 +224,15 @@ export class AudioEngine {
     this.wakeLock = null;
   }
 
+  _reportError(error) {
+    this.playing = false;
+    this._emit();
+    this._syncSession();
+    this._releaseWakeLock();
+    this.onError?.(error);
+  }
+
   _emit() {
-    this.onState?.({ index: this.index, playing: this.playing });
+    this.onState?.({ index: this.index, playing: this.playing, track: this.track });
   }
 }

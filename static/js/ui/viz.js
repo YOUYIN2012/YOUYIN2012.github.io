@@ -1,7 +1,7 @@
 /**
  * viz.js — 音乐球迷你可视化
  *
- * 外环四段弧 = 四首曲目（当前曲目弧更亮更长）；
+ * 外环分段弧 = 当前曲目列表（当前曲目弧更亮更长）；
  * 休眠时缓慢旋转，播放时弧线变为频谱短刺随节拍呼吸。
  * 只读取 engine.tick() 已缓存的采样数据，自身不做 analyser 调用。
  */
@@ -37,8 +37,12 @@ export class FabViz {
   resize() {
     this.dpr = Math.min(devicePixelRatio || 1, 2);
     const rect = this.canvas.getBoundingClientRect();
-    this.canvas.width = Math.max(1, Math.round(rect.width * this.dpr));
-    this.canvas.height = Math.max(1, Math.round(rect.height * this.dpr));
+    const width = Math.max(1, Math.round(rect.width * this.dpr));
+    const height = Math.max(1, Math.round(rect.height * this.dpr));
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
   }
 
   start() {
@@ -49,7 +53,7 @@ export class FabViz {
   }
   schedule(immediate = false) {
     if (!this.running) return;
-    const delay = immediate ? 0 : (this.reduced ? 250 : (this.engine.playing ? 0 : 66));
+    const delay = immediate ? 0 : (this.reduced ? 250 : (this.engine.playing ? 0 : 80));
     if (delay) {
       this.timerId = setTimeout(() => {
         this.timerId = 0;

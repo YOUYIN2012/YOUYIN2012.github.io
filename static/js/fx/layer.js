@@ -4,8 +4,8 @@
  * 职责：稀疏漂浮星尘、轻触星光爆发、流星雨、细指针光标拖尾。
  * 视觉原则：冷色、crisp、少而克制——不用 shadowBlur，不叠辉光。
  *
- * 性能：DPR 上限 2、页面隐藏即停、reduced-motion 仅保留
- * 极简一次淡出反馈、粒子规模按指针类型分级。
+ * 性能：DPR 上限 2 + 总像素预算、页面隐藏即停、空闲主动降帧、
+ * reduced-motion 仅保留极简一次淡出反馈、粒子规模按指针类型分级并设硬上限。
  */
 
 import { clamp, rand, pick, prefersReducedMotion, isCoarsePointer, rafThrottle } from '../utils.js';
@@ -17,6 +17,9 @@ const COOL = [
   ['#a8c8ff', '#8fd6f2'],
   ['#cfe6ff', '#9fb8ff'],
 ];
+
+const MAX_BURST_PARTICLES = 384;
+const MAX_METEORS = 48;
 
 /* 四角星（unit 路径） */
 const STAR = new Path2D();
@@ -34,10 +37,10 @@ export class Layer {
     this.dpr = Math.min(devicePixelRatio || 1, 2);
     this.coarse = isCoarsePointer();
     this.reduced = prefersReducedMotion();
+    this.maxPixels = this.coarse ? 2_000_000 : 4_000_000;
     this.running = false;
     this.rafId = 0;
     this.ambientMax = this.reduced ? 0 : (this.coarse ? 9 : 16);
-    this.frameInterval = 1000 / (this.coarse ? 30 : 60);
     this.ambient = [];
     this.bursts = [];
     this.rings = [];
@@ -62,18 +65,29 @@ export class Layer {
     this.motionQuery.addEventListener?.('change', (event) => {
       this.reduced = event.matches;
       this.ambientMax = this.reduced ? 0 : (this.coarse ? 9 : 16);
-      if (this.reduced) this.ambient.length = 0;
+      if (this.reduced) {
+        this.ambient.length = 0;
+        this.meteors.length = 0;
+        this.meteorSchedule.length = 0;
+        this.meteorQueue = this.meteorWindow = 0;
+      }
       this.start();
     });
     this.start();
   }
 
   resize() {
-    this.dpr = Math.min(devicePixelRatio || 1, 2);
     this.w = this.canvas.clientWidth || innerWidth;
     this.h = this.canvas.clientHeight || innerHeight;
-    this.canvas.width = Math.round(this.w * this.dpr);
-    this.canvas.height = Math.round(this.h * this.dpr);
+    const requestedDpr = Math.min(devicePixelRatio || 1, 2);
+    const requestedPixels = this.w * this.h * requestedDpr * requestedDpr;
+    this.dpr = requestedDpr * Math.min(1, Math.sqrt(this.maxPixels / Math.max(1, requestedPixels)));
+    const width = Math.max(1, Math.round(this.w * this.dpr));
+    const height = Math.max(1, Math.round(this.h * this.dpr));
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
   }
 
@@ -93,7 +107,10 @@ export class Layer {
 
   /** 轻触星光爆发（页面坐标）——星尘与天空小星同规格（1–4px） */
   burst(x, y, { count, power = 1 } = {}) {
-    const n = this.reduced ? 8 : Math.min(count ?? (this.coarse ? 26 : 38), 96);
+    const requested = Number.isFinite(count) ? count : (this.coarse ? 26 : 38);
+    const n = this.reduced ? 8 : clamp(Math.round(requested), 1, 96);
+    const overflow = Math.max(0, this.bursts.length + n - MAX_BURST_PARTICLES);
+    if (overflow) this.bursts.splice(0, overflow);
     for (let i = 0; i < n; i++) {
       const a = rand(0, Math.PI * 2);
       const sp = rand(36, 210) * power;
@@ -116,7 +133,7 @@ export class Layer {
 
   /** 纤细扩散光环：即时触觉级的视觉反馈（crisp 描线，无辉光） */
   ring(x, y) {
-    if (this.rings.length > 24) return;
+    if (this.rings.length >= 24) return;
     this.rings.push({ x, y, life: 0, maxLife: 0.55 });
     this.start();
   }
@@ -125,8 +142,11 @@ export class Layer {
   meteorShower(count, duration = 4) {
     if (this.reduced) return;
     const base = this.coarse ? 9 : 14;
-    const total = count ?? Math.round(rand(base * 0.8, base * 1.3));
-    const actualDuration = count === undefined ? duration * rand(0.88, 1.14) : duration;
+    const requested = Number.isFinite(count) ? count : Math.round(rand(base * 0.8, base * 1.3));
+    const total = clamp(Math.round(requested), 0, MAX_METEORS);
+    if (!total) return;
+    const safeDuration = Number.isFinite(duration) ? clamp(duration, 0.5, 12) : 4;
+    const actualDuration = count === undefined ? safeDuration * rand(0.88, 1.14) : safeDuration;
 
     // 2–4 个随机密集区混合少量散点，既不均匀排队，也不会漏发。
     const clusterCount = Math.floor(rand(2, 5));
@@ -157,6 +177,7 @@ export class Layer {
       [202, 222, 255],
     ]);
 
+    if (this.meteors.length >= MAX_METEORS) this.meteors.shift();
     this.meteors.push({
       x: fromTop ? rand(-0.12, 0.72) * this.w : rand(-150, -20),
       y: fromTop ? rand(-90, -8) : rand(-0.04, 0.42) * this.h,
@@ -189,7 +210,11 @@ export class Layer {
   loop(ts) {
     if (!this.running) return;
     this.rafId = requestAnimationFrame(this.frame);
-    if (this.lastTs && ts - this.lastTs < this.frameInterval - 1) return;
+    const interactive = this.bursts.length || this.rings.length || this.meteors.length ||
+      this.trail.length || this.meteorQueue > 0;
+    const targetFps = interactive ? (this.coarse ? 30 : 60) : (this.coarse ? 20 : 30);
+    const frameInterval = 1000 / targetFps;
+    if (this.lastTs && ts - this.lastTs < frameInterval - 1) return;
     const dt = this.lastTs ? Math.min((ts - this.lastTs) / 1000, 0.05) : 0.016;
     this.lastTs = ts;
 

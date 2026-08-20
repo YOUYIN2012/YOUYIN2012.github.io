@@ -4,13 +4,15 @@
  * 极简构成：纵向冷色渐变 + 单条缓慢极光带 + 单层稀疏 crisp 星野 +
  * 抗锯齿月亮 + 低频流星。音频能量（uBeat）轻微驱动极光与月晕。
  *
- * 清晰度策略：全 DPR 渲染（上限 2），不做升采样；星星为紧致圆点。
- * 性能策略：FBM 3 octave（降档 2）、页面隐藏即停、上下文丢失恢复、
- * FPS 看门狗先降 octave 再降分辨率（0.85 / 0.7）、
- * prefers-reduced-motion 冻结时间轴。
+ * 清晰度策略：目标 DPR 上限 2，并受总像素预算约束；星星为紧致圆点。
+ * 性能策略：FBM 3 octave（降档 2）、粗指针设备 30fps、页面隐藏即停、
+ * 上下文丢失恢复、FPS 看门狗按负载降档并在稳定后回升、
+ * prefers-reduced-motion 冻结时间轴并降到 4fps。
  */
 
-import { clamp, lerp, mixRGB, prefersReducedMotion, rafThrottle, FpsGuard } from '../utils.js';
+import {
+  clamp, lerp, mixRGB, prefersReducedMotion, isCoarsePointer, rafThrottle, FpsGuard,
+} from '../utils.js';
 
 const VERT = `#version 300 es
 layout(location=0) in vec2 aPos;
@@ -231,13 +233,17 @@ export function autoPaletteForHour(hour) {
 }
 
 export class Sky {
-  constructor(canvas) {
+  constructor(canvas, { disabled = false } = {}) {
     this.canvas = canvas;
     this.gl = null;
+    this.ready = false;
     this.running = false;
     this.rafId = 0;
     this.timerId = 0;
     this.qualityLevel = 0;
+    this.coarse = isCoarsePointer();
+    this.targetFps = this.coarse ? 30 : 60;
+    this.maxPixels = this.coarse ? 2_200_000 : 4_000_000;
     // 先减少 FBM octave，再逐级降低内部渲染分辨率。
     this.scaleSteps = [1.0, 1.0, 0.85, 0.7];
     this.pointer = { x: 0, y: 0 };
@@ -256,25 +262,30 @@ export class Sky {
     this.motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
 
     this.fpsGuard = new FpsGuard({
+      badMs: this.coarse ? 42 : 28,
       maxLevel: this.scaleSteps.length - 1,
       onDegrade: (level) => {
         this.qualityLevel = Math.min(level, this.scaleSteps.length - 1);
         this.resize();
       },
+      onRecover: (level) => {
+        this.qualityLevel = Math.max(0, level);
+        this.resize();
+      },
     });
 
-    if (!this.init()) return;
+    if (disabled || !this.init()) return;
     this.resize();
     this.bindEvents();
   }
 
   init() {
+    this.ready = false;
     const gl = this.canvas.getContext('webgl2', {
       alpha: false, antialias: false, depth: false, stencil: false,
       powerPreference: 'low-power', preserveDrawingBuffer: false,
     });
-    if (!gl) return false;
-    this.gl = gl;
+    if (!gl) { this.gl = null; return false; }
 
     const compile = (type, src) => {
       const sh = gl.createShader(type);
@@ -282,13 +293,19 @@ export class Sky {
       gl.compileShader(sh);
       if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
         console.warn('[sky] shader error:', gl.getShaderInfoLog(sh));
+        gl.deleteShader(sh);
         return null;
       }
       return sh;
     };
     const vs = compile(gl.VERTEX_SHADER, VERT);
     const fs = compile(gl.FRAGMENT_SHADER, FRAG);
-    if (!vs || !fs) return false;
+    if (!vs || !fs) {
+      if (vs) gl.deleteShader(vs);
+      if (fs) gl.deleteShader(fs);
+      this.gl = null;
+      return false;
+    }
 
     const prog = gl.createProgram();
     gl.attachShader(prog, vs);
@@ -296,9 +313,17 @@ export class Sky {
     gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
       console.warn('[sky] link error:', gl.getProgramInfoLog(prog));
+      gl.deleteProgram(prog);
+      gl.deleteShader(vs);
+      gl.deleteShader(fs);
+      this.gl = null;
       return false;
     }
     gl.useProgram(prog);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    this.gl = gl;
+    this.ready = true;
     this.prog = prog;
 
     const buf = gl.createBuffer();
@@ -325,17 +350,30 @@ export class Sky {
       this.fpsGuard.reset();
       if (this.running) { this.stop(); this.start(); }
     });
-    this.canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.stop(); });
+    this.canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      this.ready = false;
+      this.canvas.classList.add('is-unavailable');
+      this.stop();
+    });
     this.canvas.addEventListener('webglcontextrestored', () => {
-      if (this.init()) { this.resize(); this.start(); }
+      if (this.init()) {
+        this.canvas.classList.remove('is-unavailable');
+        this.resize();
+        this.start();
+      }
     });
   }
 
   resize() {
+    const cssW = this.canvas.clientWidth || innerWidth;
+    const cssH = this.canvas.clientHeight || innerHeight;
     const dpr = Math.min(devicePixelRatio || 1, 2);
-    const scale = this.scaleSteps[this.qualityLevel];
-    const w = Math.round(this.canvas.clientWidth * dpr * scale) || Math.round(innerWidth * dpr * scale);
-    const h = Math.round(this.canvas.clientHeight * dpr * scale) || Math.round(innerHeight * dpr * scale);
+    const requestedPixels = cssW * cssH * dpr * dpr;
+    const budgetScale = Math.min(1, Math.sqrt(this.maxPixels / Math.max(1, requestedPixels)));
+    const scale = this.scaleSteps[this.qualityLevel] * budgetScale;
+    const w = Math.max(1, Math.round(cssW * dpr * scale));
+    const h = Math.max(1, Math.round(cssH * dpr * scale));
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;
@@ -355,18 +393,22 @@ export class Sky {
   setAudioEnergy(v) { this.beatTarget = clamp(v, 0, 1); }
 
   start() {
-    if (this.running || !this.gl || document.hidden) return;
+    if (this.running || !this.ready || !this.gl || document.hidden) return;
     this.running = true;
     this.lastFrameTs = 0;
-    this.schedule();
+    this.schedule(true);
   }
-  schedule() {
+  schedule(immediate = false) {
     if (!this.running) return;
-    if (this.frozen) {
+    const fps = this.frozen ? 4 : this.targetFps;
+    if (!immediate && fps < 55) {
+      const interval = 1000 / fps;
+      const elapsed = this.lastFrameTs ? performance.now() - this.lastFrameTs : interval;
+      const delay = Math.max(0, interval - elapsed - 8);
       this.timerId = setTimeout(() => {
         this.timerId = 0;
         this.rafId = requestAnimationFrame(this.frame);
-      }, 250);
+      }, delay);
     } else {
       this.rafId = requestAnimationFrame(this.frame);
     }
@@ -381,8 +423,7 @@ export class Sky {
 
   loop(ts) {
     if (!this.running) return;
-    this.rafId = 0;
-    this.schedule();
+    this.rafId = this.timerId = 0;
 
     const dt = this.lastFrameTs
       ? Math.min((ts - this.lastFrameTs) / 1000, this.frozen ? 0.3 : 0.1)
@@ -393,10 +434,13 @@ export class Sky {
     if (!this.frozen) this.fpsGuard.tick(ts);
     if (!this.frozen) this.time += dt;
 
-    this.pointer.x = lerp(this.pointer.x, this.pointerTarget.x, 0.045);
-    this.pointer.y = lerp(this.pointer.y, this.pointerTarget.y, 0.045);
-    this.storm = lerp(this.storm, this.stormTarget, 0.02);
-    this.beat = lerp(this.beat, this.beatTarget, 0.12);
+    const pointerK = 1 - Math.exp(-dt * 2.8);
+    const stormK = 1 - Math.exp(-dt * 1.25);
+    const beatK = 1 - Math.exp(-dt * 8.0);
+    this.pointer.x = lerp(this.pointer.x, this.pointerTarget.x, pointerK);
+    this.pointer.y = lerp(this.pointer.y, this.pointerTarget.y, pointerK);
+    this.storm = lerp(this.storm, this.stormTarget, stormK);
+    this.beat = lerp(this.beat, this.beatTarget, beatK);
 
     const k = 1 - Math.exp(-dt * 1.2);
     for (const key of ['top', 'mid', 'bot', 'auroraA', 'auroraB', 'moon']) {
@@ -417,5 +461,6 @@ export class Sky {
     gl.uniform3fv(u.uAuroraB, this.palette.auroraB);
     gl.uniform3fv(u.uMoonCol, this.palette.moon);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    this.schedule();
   }
 }

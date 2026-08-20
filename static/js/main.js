@@ -10,10 +10,11 @@
  * 自动时段调色板、Service Worker 离线。
  */
 
-import { $, clamp, rafThrottle, haptic, isCoarsePointer } from './utils.js';
+import {
+  $, clamp, rafThrottle, haptic, isCoarsePointer, prefersReducedMotion,
+} from './utils.js';
 import { Sky, autoPaletteForHour } from './fx/sky.js';
 import { Layer } from './fx/layer.js';
-import { WebGPUBurst } from './fx/webgpu-burst.js';
 import { AudioEngine } from './audio/engine.js';
 import { FabViz } from './ui/viz.js';
 
@@ -22,10 +23,12 @@ const params = new URLSearchParams(location.search);
 const skyCanvas = $('#sky');
 const stage = $('#stage');
 const audioFab = $('#audioFab');
+const stormButton = $('#stormButton');
+const status = $('#status');
 
 /* ===================== 天空与交互层 ===================== */
-const sky = new Sky(skyCanvas);
-if (sky.gl) sky.start();
+const sky = new Sky(skyCanvas, { disabled: params.get('webgl') === '0' });
+if (sky.ready) sky.start();
 else document.body.classList.add('no-webgl');
 
 const layer = new Layer(stage);
@@ -33,38 +36,57 @@ const layer = new Layer(stage);
 /* WebGPU 爆发路由（不可用回落 Canvas 2D；?webgpu=0 可强制关闭） */
 let burstAt = (x, y, opts) => layer.burst(x, y, opts);
 const forceCanvas = params.get('webgpu') === '0';
+let webgpuInitPromise = null;
 
 const initWebGPU = async () => {
-  if (forceCanvas || !('gpu' in navigator)) return;
-  const canvas = document.createElement('canvas');
-  canvas.className = 'layer';
-  canvas.setAttribute('aria-hidden', 'true');
-  canvas.style.zIndex = '2';
-  canvas.style.pointerEvents = 'none';
-  const gpu = new WebGPUBurst(canvas);
-  const inited = await gpu.init();
-  if (inited) {
+  if (forceCanvas || prefersReducedMotion() || !('gpu' in navigator)) return false;
+  try {
+    const { WebGPUBurst } = await import('./fx/webgpu-burst.js');
+    const canvas = document.createElement('canvas');
+    canvas.className = 'layer gpu-burst';
+    canvas.setAttribute('aria-hidden', 'true');
+    const gpu = new WebGPUBurst(canvas);
+    const inited = await gpu.init();
+    if (!inited) { canvas.remove(); return false; }
+
     document.body.appendChild(canvas);
     burstAt = (x, y, opts) => {
-      layer.ring(x, y);               // 光环始终由 2D 层绘制
-      if (!gpu.burst(x, y, opts)) layer.burst(x, y, opts);
+      if (prefersReducedMotion() || !gpu.burst(x, y, opts)) {
+        layer.burst(x, y, opts);
+      } else {
+        layer.ring(x, y);             // GPU 成功时只补一层 Canvas 光环
+      }
     };
-  } else {
-    canvas.remove();
+    return true;
+  } catch (err) {
+    console.warn('[webgpu] lazy load failed:', err);
+    return false;
   }
 };
-// WebGPU 探测不阻塞首屏；初始化前的点击自然走 Canvas 2D 回退。
-if ('requestIdleCallback' in window) requestIdleCallback(initWebGPU, { timeout: 1500 });
-else setTimeout(initWebGPU, 0);
+// 首次交互仍走 Canvas；空闲时再按需加载 WebGPU，避免首帧与设备初始化争抢主线程。
+const warmWebGPU = () => {
+  if (webgpuInitPromise) return;
+  webgpuInitPromise = new Promise((resolve) => {
+    const run = () => initWebGPU().then(resolve);
+    if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout: 1400 });
+    else setTimeout(run, 800);
+  });
+};
 
 /* ===================== 音频 ===================== */
 const engine = new AudioEngine($('#audio'));
 const fabViz = new FabViz($('#fabViz'), engine);
 
-engine.onState = ({ playing }) => {
+engine.onState = ({ playing, track }) => {
   audioFab.setAttribute('aria-pressed', String(playing));
+  audioFab.setAttribute('aria-label', track
+    ? `${playing ? '暂停' : '播放'}背景音乐：${track.title}（双击下一首，长按上一首）`
+    : '播放背景音乐（双击下一首，长按上一首）');
   fabViz.poke();
   if (playing || engine.energy > 0.002) startEnergyLoop();
+};
+engine.onError = () => {
+  status.textContent = '音乐加载失败，请检查网络后重试。';
 };
 
 /* 音乐球手势：单击 播放/暂停 · 双击 下一首 · 长按 上一首 */
@@ -88,6 +110,8 @@ engine.onState = ({ playing }) => {
 
   fab.addEventListener('click', () => {
     if (longFired) { longFired = false; return; }
+    // 第一次播放必须留在用户激活窗口内，避免部分移动浏览器拦截延迟播放。
+    if (engine.index < 0) { fireToggle(); return; }
     clearTimeout(clickTimer);
     clickTimer = setTimeout(() => {
       // 等待可能的第二次点击（双击）
@@ -99,9 +123,10 @@ engine.onState = ({ playing }) => {
     fireNext();
   });
   fab.addEventListener('keydown', (e) => {
+    // 阻止 button 的后续默认 click，由此处准确切换一次。
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fireToggle(); }
-    if (e.key === 'ArrowRight') fireNext();
-    if (e.key === 'ArrowLeft') firePrev();
+    if (e.key === 'ArrowRight') { e.preventDefault(); fireNext(); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); firePrev(); }
   });
 }
 
@@ -122,12 +147,12 @@ function energyLoop(ts) {
   const dt = lastEnergyTs ? Math.min((ts - lastEnergyTs) / 1000, 0.1) : 1 / 60;
   lastEnergyTs = ts;
   engine.tick(dt);
-  if (sky.gl) sky.setAudioEnergy(engine.energy);
+  if (sky.ready) sky.setAudioEnergy(engine.energy);
   if (engine.playing || engine.energy > 0.002) {
     energyRaf = requestAnimationFrame(energyLoop);
   } else {
     energyRaf = 0;
-    if (sky.gl) sky.setAudioEnergy(0);
+    if (sky.ready) sky.setAudioEnergy(0);
   }
 }
 document.addEventListener('visibilitychange', () => {
@@ -136,13 +161,16 @@ document.addEventListener('visibilitychange', () => {
 });
 
 /* ===================== 指针 / 陀螺仪视差 ===================== */
-if (sky.gl) {
-  if (!coarse) {
-    addEventListener('pointermove', rafThrottle((e) => {
+if (!coarse) {
+  addEventListener('pointermove', rafThrottle((e) => {
+    if (sky.ready) {
       sky.setPointer((e.clientX / innerWidth) * 2 - 1, (e.clientY / innerHeight) * 2 - 1);
-      layer.pushTrail(e.clientX, e.clientY);
-    }), { passive: true });
-  }
+    }
+    layer.pushTrail(e.clientX, e.clientY);
+  }), { passive: true });
+}
+
+if (sky.ready) {
   const onOrientation = (e) => {
     if (e.beta === null || e.gamma === null) return;
     sky.setPointer(clamp(e.gamma / 40, -1, 1), clamp((e.beta - 45) / 40, -1, 1));
@@ -170,26 +198,37 @@ if (sky.gl) {
 }
 
 /* ===================== 交互：轻触星光 / 三连击流星雨 ===================== */
-{
-  let taps = [];
-  let storming = false;
+let taps = [];
+let storming = false;
 
-  const storm = () => {
-    if (storming) return;
-    storming = true;
-    sky.gl && sky.meteorStorm(true);
-    layer.meteorShower();
-    haptic([8, 40, 8]);
-    setTimeout(() => {
-      sky.gl && sky.meteorStorm(false);
-      storming = false;
-    }, 5200);
-  };
+const storm = () => {
+  if (storming) return;
+  storming = true;
+  if (prefersReducedMotion()) {
+    layer.burst(innerWidth / 2, innerHeight * 0.38, { count: 8, power: 0.45 });
+    status.textContent = '已用低动态星光反馈替代流星雨。';
+    haptic(8);
+    setTimeout(() => { storming = false; }, 700);
+    return;
+  }
 
-  stage.addEventListener('pointerdown', (e) => {
-    burstAt(e.clientX, e.clientY, { power: 0.85 });
-    haptic(4);
+  if (sky.ready) sky.meteorStorm(true);
+  layer.meteorShower();
+  status.textContent = '流星雨已触发。';
+  haptic([8, 40, 8]);
+  setTimeout(() => {
+    if (sky.ready) sky.meteorStorm(false);
+    storming = false;
+  }, 5200);
+};
 
+stage.addEventListener('pointerdown', (e) => {
+  burstAt(e.clientX, e.clientY, { power: 0.85 });
+  warmWebGPU();
+  haptic(4);
+
+  // 多指触控只让主指针参与三击计数，避免三指同时落下误触流星雨。
+  if (e.isPrimary) {
     const now = performance.now();
     taps = taps.filter((t) => now - t < 850);
     taps.push(now);
@@ -197,8 +236,10 @@ if (sky.gl) {
       taps = [];
       storm();
     }
-  }, { passive: true });
-}
+  }
+}, { passive: true });
+
+stormButton.addEventListener('click', storm);
 
 /* ===================== 调试 / 演示钩子 ===================== */
 const DEBUG = params.get('debug') === '1';
@@ -206,20 +247,20 @@ const DEBUG = params.get('debug') === '1';
 if (params.get('demo') === 'storm') {
   setTimeout(() => {
     layer.meteorShower(20, 4);
-    if (sky.gl) sky.meteorStorm(true);
+    if (sky.ready && !prefersReducedMotion()) sky.meteorStorm(true);
   }, 800);
-  setTimeout(() => { if (sky.gl) sky.meteorStorm(false); }, 6200);
+  setTimeout(() => { if (sky.ready) sky.meteorStorm(false); }, 6200);
 }
 if (DEBUG) {
   setInterval(() => {
     const m0 = layer.meteors[0];
-    document.title = `G${sky.gl ? '✓' : '✗'}L${layer.running ? '▶' : '⏸'}q${layer.meteorQueue}w${layer.meteorWindow?.toFixed(1)}m${layer.meteors.length}b${layer.bursts.length}` +
+    document.title = `G${sky.ready ? '✓' : '✗'}L${layer.running ? '▶' : '⏸'}q${layer.meteorQueue}w${layer.meteorWindow?.toFixed(1)}m${layer.meteors.length}b${layer.bursts.length}` +
       (m0 ? ` M@${Math.round(m0.x)},${Math.round(m0.y)}v${Math.round(m0.vx)},${Math.round(m0.vy)}a${Math.round(m0.life * 100)}/${Math.round(m0.maxLife * 100)}` : '');
   }, 300);
 }
 
 /* ===================== 自动时段调色板 ===================== */
-if (sky.gl) {
+if (sky.ready) {
   const apply = () => sky.setPalette(autoPaletteForHour(new Date().getHours()));
   apply();
   setInterval(apply, 5 * 60_000);

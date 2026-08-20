@@ -1,0 +1,12 @@
+{
+  "name": "love-sky",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "node scripts/check-project.mjs",
+    "test": "npm run check && node --test"
+  }
+}

@@ -10,9 +10,10 @@
  *   28 hue | 32 spin | 36 kind(0 星 1 点) | 40 alive | 44 pad
  */
 
-import { rand } from '../utils.js';
+import { rand, isCoarsePointer } from '../utils.js';
 
-const MAX_PARTICLES = 2048;
+// 单次交互通常只有 26–38 个粒子；512 已覆盖连续点击，又避免每帧空跑 2048 槽位。
+const MAX_PARTICLES = 512;
 const STRIDE = 48;
 
 const WGSL = /* wgsl */ `
@@ -140,6 +141,7 @@ export class WebGPUBurst {
   constructor(canvas) {
     this.canvas = canvas;
     this.dpr = Math.min(devicePixelRatio || 1, 2);
+    this.maxPixels = isCoarsePointer() ? 2_000_000 : 4_000_000;
     this.simTime = 0;
     this.lastTs = 0;
     this.running = false;
@@ -162,10 +164,17 @@ export class WebGPUBurst {
         adapter.requestDevice(),
         new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000)),
       ]);
-      this.device.lost.then(() => { this.stop(); this.ok = false; });
+      this.device.lost.then(() => {
+        this.stop();
+        this.ok = false;
+        this.canvas.remove();
+      });
+      this.device.addEventListener?.('uncapturederror', (event) => {
+        console.warn('[webgpu] uncaptured error:', event.error?.message || event.error);
+      });
 
       this.ctx = this.canvas.getContext('webgpu');
-      if (!this.ctx) return false;
+      if (!this.ctx) throw new Error('WebGPU canvas context unavailable');
       this.format = navigator.gpu.getPreferredCanvasFormat();
       this.ctx.configure({
         device: this.device,
@@ -183,6 +192,11 @@ export class WebGPUBurst {
       });
 
       const module = this.device.createShaderModule({ code: WGSL });
+      const compilation = await module.getCompilationInfo?.();
+      const shaderErrors = compilation?.messages?.filter((message) => message.type === 'error') || [];
+      if (shaderErrors.length) {
+        throw new Error(shaderErrors.map((message) => message.message).join('\n'));
+      }
 
       const computeLayout = this.device.createBindGroupLayout({
         entries: [
@@ -197,11 +211,11 @@ export class WebGPUBurst {
         ],
       });
 
-      this.computePipeline = this.device.createComputePipeline({
+      const computeDescriptor = {
         layout: this.device.createPipelineLayout({ bindGroupLayouts: [computeLayout] }),
         compute: { module, entryPoint: 'simulate' },
-      });
-      this.renderPipeline = this.device.createRenderPipeline({
+      };
+      const renderDescriptor = {
         layout: this.device.createPipelineLayout({ bindGroupLayouts: [renderLayout] }),
         vertex: { module, entryPoint: 'vsMain' },
         fragment: {
@@ -215,7 +229,13 @@ export class WebGPUBurst {
           }],
         },
         primitive: { topology: 'triangle-list' },
-      });
+      };
+      this.computePipeline = this.device.createComputePipelineAsync
+        ? await this.device.createComputePipelineAsync(computeDescriptor)
+        : this.device.createComputePipeline(computeDescriptor);
+      this.renderPipeline = this.device.createRenderPipelineAsync
+        ? await this.device.createRenderPipelineAsync(renderDescriptor)
+        : this.device.createRenderPipeline(renderDescriptor);
 
       this.computeGroup = this.device.createBindGroup({
         layout: computeLayout,
@@ -241,22 +261,31 @@ export class WebGPUBurst {
       return true;
     } catch (err) {
       console.warn('[webgpu] init failed:', err);
+      this.stop();
+      this.ok = false;
+      try { this.device?.destroy(); } catch { /* 已丢失或平台不支持销毁 */ }
       return false;
     }
   }
 
   resize() {
-    this.dpr = Math.min(devicePixelRatio || 1, 2);
-    this.w = innerWidth;
-    this.h = innerHeight;
-    this.canvas.width = Math.round(this.w * this.dpr);
-    this.canvas.height = Math.round(this.h * this.dpr);
+    this.w = this.canvas.clientWidth || innerWidth;
+    this.h = this.canvas.clientHeight || innerHeight;
+    const requestedDpr = Math.min(devicePixelRatio || 1, 2);
+    const requestedPixels = this.w * this.h * requestedDpr * requestedDpr;
+    this.dpr = requestedDpr * Math.min(1, Math.sqrt(this.maxPixels / Math.max(1, requestedPixels)));
+    const width = Math.max(1, Math.round(this.w * this.dpr));
+    const height = Math.max(1, Math.round(this.h * this.dpr));
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
   }
 
   /** 与 Layer.burst 对齐（入参 CSS 像素，内部换算为设备像素；星尘 1–4px 规格） */
   burst(x, y, { count = 36, power = 1 } = {}) {
     if (!this.ok) return false;
-    const n = Math.min(count, MAX_PARTICLES);
+    const n = Math.max(1, Math.min(Math.round(count), 64, MAX_PARTICLES));
     const batch = new ArrayBuffer(n * STRIDE);
     const f32 = new Float32Array(batch);
     const px = x * this.dpr, py = y * this.dpr;

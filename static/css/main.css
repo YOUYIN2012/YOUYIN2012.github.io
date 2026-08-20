@@ -48,7 +48,6 @@
   :focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 3px;
-    border-radius: 50%;
   }
 
   .layer {
@@ -60,6 +59,8 @@
   }
   .sky   { z-index: 0; pointer-events: none; }
   .stage { z-index: 1; touch-action: manipulation; }
+  .gpu-burst { z-index: 2; pointer-events: none; }
+  .no-webgl .sky, .sky.is-unavailable { display: none; }
 }
 
 /* ---------- components ---------- */
@@ -106,10 +107,62 @@
       & .icon-pause { display: block; color: var(--accent); }
     }
   }
+
+  /* 键盘用户获得焦点时显示，不占用默认画面。 */
+  .a11y-action {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 1rem);
+    left: 50%;
+    z-index: 20;
+    padding: 0.7rem 1.1rem;
+    border: 1px solid var(--glass-brd);
+    border-radius: 999px;
+    color: var(--ink);
+    background: oklch(16% 0.05 245 / 0.94);
+    box-shadow: 0 8px 24px oklch(5% 0.03 250 / 0.4);
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, -180%);
+    transition: opacity 0.2s var(--ease-out), transform 0.35s var(--ease-out);
+
+    &:focus-visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translate(-50%, 0);
+    }
+  }
+
+  .fallback-message {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    z-index: 20;
+    width: min(84vw, 30rem);
+    padding: 1rem 1.2rem;
+    border: 1px solid var(--glass-brd);
+    border-radius: 1rem;
+    color: var(--ink);
+    background: oklch(16% 0.05 245 / 0.96);
+    line-height: 1.6;
+    text-align: center;
+    transform: translate(-50%, -50%);
+  }
 }
 
 /* ---------- a11y / perf / 多端 ---------- */
 @layer a11y {
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
   @media (pointer: coarse) {
     .fab { width: 64px; height: 64px; }
   }
@@ -117,7 +170,7 @@
     .fab { right: max(env(safe-area-inset-right, 0px), 0.9rem); bottom: calc(env(safe-area-inset-bottom, 0px) + 0.9rem); }
   }
   @media (prefers-reduced-motion: reduce) {
-    .fab { transition: none; }
+    .fab, .a11y-action { transition: none; }
   }
   @media (prefers-reduced-transparency: reduce) {
     .fab { background: oklch(16% 0.05 245); backdrop-filter: none; -webkit-backdrop-filter: none; }
