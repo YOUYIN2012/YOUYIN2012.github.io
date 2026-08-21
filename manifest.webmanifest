@@ -1,17 +1,18 @@
 {
   "name": "爱意随风起",
   "short_name": "爱意随风起",
-  "description": "愿时光温柔，愿你被爱。一片用代码写就的星河。",
+  "description": "桌面 360° 地平全景、131 颗亮星、固定满月与音乐共同呼吸的纯静态星空。",
   "lang": "zh-CN",
   "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#0a081e",
-  "theme_color": "#0a081e",
+  "background_color": "#060b1e",
+  "theme_color": "#060b1e",
   "categories": ["lifestyle", "entertainment"],
   "icons": [
     { "src": "static/images/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "static/images/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+    { "src": "static/images/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "static/images/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

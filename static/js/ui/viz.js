@@ -102,11 +102,12 @@ export class FabViz {
     if (!w || !h) return;
     ctx.clearRect(0, 0, w, h);
     const cx = w / 2, cy = h / 2;
-    const R = Math.min(w, h) / 2 - this.dpr * 2.5;
+    // Canvas 比按钮向外多 14px：轨道贴着按钮边缘，频谱短刺留在画布内，不再被裁掉。
+    const R = Math.min(w, h) / 2 - this.dpr * 12;
     const playing = this.engine.playing;
     const e = this.engine.energy;
 
-    /* 四段曲目弧（间隙 10°） */
+    /* 曲目弧：每首歌一段（间隙 10°），当前曲目更亮更长 */
     const tracks = this.engine.tracks.length;
     const gap = 0.16;
     const seg = (Math.PI * 2 - gap * tracks) / tracks;

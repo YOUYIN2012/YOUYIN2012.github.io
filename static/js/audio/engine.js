@@ -1,21 +1,27 @@
 /**
  * engine.js — Web Audio 音频引擎
  *
- * <audio> → MediaElementSource → GainNode（切歌交叉淡出）
- *        → AnalyserNode（频谱/波形）→ destination
+ * <audio> → MediaElementSource → GainNode（切歌快速淡入）
+ *        → AnalyserNode → AudioWorklet 节拍检测 → destination
  *
- * 每帧 tick() 采样一次并计算 RMS 能量（驱动极光/月晕/频谱环）。
- * 附加：Media Session 锁屏控制 + 静态封面、播放时 Wake Lock、
- * 自动连播、错误回调兜底。无任何文字 UI 依赖。
+ * 播放时 tick() 采样并计算 RMS 能量（驱动极光/月晕/频谱环），节拍瞬态叠加。
+ * 附加：OPFS 离线音频仓库（跨 SW 版本存活）、暂停时生成式环境音床（synth.js）、
+ * Media Session 锁屏控制 + 静态封面、播放时 Wake Lock、自动连播、错误回调兜底。
  */
 
+import { AmbientSynth } from './synth.js';
+import { TrackStore } from './track-store.js';
+
 const musicUrl = (name) => new URL(`../../music/${name}`, import.meta.url).href;
+const BEAT_WORKLET_URL = new URL('./beat-worklet.js', import.meta.url).href;
+
+/** 从曲目 src 提取 OPFS 存储用的文件名。 */
+const trackFilename = (src) => decodeURIComponent(new URL(src, location.href).pathname.split('/').pop());
 
 const TRACKS = [
-  // { title: 'Thinking Out Loud', artist: 'Ed Sheeran', src: musicUrl('Ed Sheeran-Thinking Out Loud.mp3') },
-  // { title: '晴天', artist: '周杰伦', src: musicUrl('周杰伦 - 晴天.mp3') },
-  // { title: '少一点天分', artist: '孙盛希', src: musicUrl('孙盛希 - 少一点天分.mp3') },
   { title: 'Possible Dreams', artist: 'Eugenio Mininni', src: musicUrl('Possible Dreams-Eugenio Mininni.mp3') },
+  // 新增曲目：把 mp3 放入 static/music/ 后在此追加
+  // { title: '…', artist: '…', src: musicUrl('文件名.mp3') },
 ];
 
 const ARTWORK = [{
@@ -36,6 +42,12 @@ export class AudioEngine {
     this.wakeLock = null;
     this.transitionId = 0;
     this.sessionTrack = -1;
+    this._ctxWarned = false;
+    this.onBeat = null;       // 节拍回调（AudioWorklet 检出，strength 0..1）
+    this.beatBoost = 0;       // 节拍瞬态能量，tick 时叠加进总能量
+    this.synth = null;
+    this.store = new TrackStore();
+    this._warmLocalCopies();
 
     this.audio = audioEl;
     this.freq = new Uint8Array(512);
@@ -43,14 +55,20 @@ export class AudioEngine {
 
     this.audio.addEventListener('ended', () => this.next());
     this.audio.addEventListener('error', () => this._reportError(this.audio.error));
+    this.audio.addEventListener('playing', () => this._persistCurrent());
     this.audio.addEventListener('play', () => {
       this.playing = true;
       this._emit();
       this._syncSession();
       this._requestWakeLock();
+      this.synth?.off();
     });
     this.audio.addEventListener('pause', () => {
       this.playing = false;
+      // 环境音床走独立输出；暂停即清空视觉瞬态，避免残留节拍继续驱动天空。
+      this.beatBoost = 0;
+      this.freq.fill(0);
+      this.synth?.on();
       this._emit();
       this._syncSession();
       this._releaseWakeLock();
@@ -79,6 +97,23 @@ export class AudioEngine {
       this.src.connect(this.gain);
       this.gain.connect(this.analyser);
       this.analyser.connect(this.ctx.destination);
+      // 环境音直接输出，不进入音乐 analyser / AudioWorklet，听觉与视觉状态彼此隔离。
+      this.synth = new AmbientSynth(this.ctx, this.ctx.destination);
+      // 节拍检测模块异步就位；就绪前保持直连，避免任何可闻中断。
+      this.ctx.audioWorklet.addModule(BEAT_WORKLET_URL).then(() => {
+        const node = new AudioWorkletNode(this.ctx, 'beat-detector', { outputChannelCount: [2] });
+        node.port.onmessage = (e) => {
+          if (typeof e.data?.beat !== 'number') return;
+          if (!this.playing) return;
+          this.beatBoost = Math.max(this.beatBoost, 0.35 + 0.65 * e.data.beat);
+          this.onBeat?.(e.data.beat);
+        };
+        this.analyser.disconnect();
+        this.analyser.connect(node);
+        node.connect(this.ctx.destination);
+      }).catch((err) => {
+        console.warn('[audio] beat worklet 不可用，保持直连', err);
+      });
       this.ready = true;
     } catch (err) {
       console.warn('[audio] Web Audio 不可用，降级为普通播放', err);
@@ -97,12 +132,13 @@ export class AudioEngine {
   async resume() {
     if (this.index < 0) return this.playAt(0);
     this.ensureContext();
-    await this.ctx?.resume().catch(() => {});
-    try {
-      await this.audio.play();
-    } catch (error) {
+    // 先同步发起 play() 占住用户手势窗口，再异步恢复 AudioContext。
+    const playing = this.audio.play().catch((error) => {
       if (error?.name !== 'AbortError') this._reportError(error);
-    }
+      return false;
+    });
+    await this._resumeCtx();
+    await playing;
   }
 
   pause() {
@@ -110,36 +146,60 @@ export class AudioEngine {
     if (this.audio.paused) this._releaseWakeLock();
   }
 
-  /** 单音源淡出 → 切换 → 淡入，避免切歌爆音 */
+  /** 单音源硬切换 + 快速淡入；play() 始终同步发起以留在用户手势栈内 */
   async playAt(i) {
     if (i < 0 || i >= this.tracks.length) return;
     const transitionId = ++this.transitionId;
     const changing = this.index !== i;
+    const wasPlaying = this.playing;
     this.index = i;
     this.ensureContext();
-    await this.ctx?.resume().catch(() => {});
 
-    const start = async () => {
-      if (transitionId !== this.transitionId) return false;
-      this.audio.src = this.tracks[i].src;
-      try {
-        await this.audio.play();
-      } catch (error) {
-        if (transitionId === this.transitionId && error?.name !== 'AbortError') {
-          this._reportError(error);
-        }
-        return false;
-      }
-      return transitionId === this.transitionId;
+    const startSource = () => {
+      // 设置音源与调用 play() 必须发生在任何 await 之前，否则部分移动浏览器会以
+      // 「非用户手势」为由拦截播放。OPFS 本地副本已在构造期预解析，此处同步可取。
+      this.audio.src = this.tracks[i]._localUrl ?? this.tracks[i].src;
+      return this.audio.play().then(
+        () => transitionId === this.transitionId,
+        (error) => {
+          if (transitionId === this.transitionId && error?.name !== 'AbortError') {
+            this._reportError(error);
+          }
+          return false;
+        },
+      );
     };
 
-    if (this.ready && changing && this.playing) {
-      await this._fadeGain(1, 0, 250);
-      if (transitionId !== this.transitionId || !await start()) return;
-      await this._fadeGain(0, 1, 450);
+    if (this.ready && changing && wasPlaying) {
+      // 硬切换 + 快速淡入：先淡出再换曲会让 play() 落在 await 之后，
+      // 脱离用户手势窗口（严格的移动端策略会拒绝播放），可靠性优先于无缝度。
+      const g = this.gain.gain;
+      g.cancelScheduledValues(this.ctx.currentTime);
+      g.setValueAtTime(0, this.ctx.currentTime);
+      const started = startSource();   // 同步发起
+      await this._resumeCtx();
+      if (!await started) {
+        // 播放失败必须还回音量，否则环境音床与后续播放全部静音
+        g.cancelScheduledValues(this.ctx.currentTime);
+        g.setValueAtTime(1, this.ctx.currentTime);
+        return;
+      }
+      await this._fadeGain(0, 1, 220);
     } else {
       if (this.gain) this.gain.gain.value = 1;
-      if (!await start()) return;
+      const started = startSource();   // 同步发起
+      await this._resumeCtx();
+      if (!await started) return;
+    }
+  }
+
+  /** 恢复 AudioContext；创建成功但始终无法进入 running 时告警一次（元素输出已被接管，会静音）。 */
+  async _resumeCtx() {
+    if (!this.ready || !this.ctx) return;
+    await this.ctx.resume().catch(() => {});
+    if (this.ctx.state !== 'running' && !this._ctxWarned) {
+      this._ctxWarned = true;
+      console.warn('[audio] AudioContext 无法进入 running 状态，声音可能被静音');
     }
   }
 
@@ -158,10 +218,18 @@ export class AudioEngine {
     });
   }
 
-  /** 每帧调用一次：采样并计算能量 */
+  /** 环境音床是否在响（暂停/兜底期间为 true，但不进入音乐可视化链） */
+  get synthActive() { return this.synth?.active ?? false; }
+
+  /** 每帧调用一次：仅在音乐播放时采样并计算能量（节拍瞬态叠加）。 */
   tick(dt = 1 / 60) {
     if (!this.ready || !this.playing) {
       this.energy *= Math.exp(-5 * dt);
+      this.beatBoost *= Math.exp(-6 * dt);
+      if (this.energy < 0.002) {
+        this.energy = 0;
+        this.freq.fill(0);
+      }
       return;
     }
     this.analyser.getByteFrequencyData(this.freq);
@@ -175,7 +243,35 @@ export class AudioEngine {
       n++;
     }
     const rms = Math.sqrt(sum / n);
-    this.energy = Math.min(1, rms * 2.4);
+    this.energy = Math.min(1, rms * 2.4 + this.beatBoost);
+    this.beatBoost *= Math.exp(-6 * dt);
+  }
+
+  /** 预解析 OPFS 本地副本的 blob URL：playAt 必须同步取 src，不能等异步查询。 */
+  _warmLocalCopies() {
+    this.store.init().then((ok) => {
+      if (!ok) return;
+      for (const track of this.tracks) {
+        this.store.url(trackFilename(track.src))
+          .then((url) => { if (url) track._localUrl = url; })
+          .catch(() => {});
+      }
+    }).catch(() => {});
+  }
+
+  /** 首次成功播放后把整曲存入 OPFS：离线可听，且跨 SW 版本升级存活。 */
+  async _persistCurrent() {
+    const track = this.track;
+    if (!track || track._stored || track._localUrl || !this.store.ok) return;
+    track._stored = true;
+    try {
+      const res = await fetch(track.src);
+      if (!res.ok) { track._stored = false; return; }
+      const bytes = await res.arrayBuffer();
+      await this.store.put(trackFilename(track.src), bytes);
+    } catch {
+      track._stored = false;
+    }
   }
 
   /* ---------- Media Session ---------- */
@@ -213,6 +309,7 @@ export class AudioEngine {
   /* ---------- Wake Lock ---------- */
 
   async _requestWakeLock() {
+    // 'screen' 是有意选择：频谱驱动的星河可视化随音乐呼吸，播放期间保持亮屏。
     if (!('wakeLock' in navigator) || this.wakeLock || document.hidden || !this.playing) return;
     try {
       this.wakeLock = await navigator.wakeLock.request('screen');
@@ -227,6 +324,8 @@ export class AudioEngine {
 
   _reportError(error) {
     this.playing = false;
+    // 离线且无本地副本时的兜底：先让环境音床进入 active，再通知可视化启动采样。
+    this.synth?.on();
     this._emit();
     this._syncSession();
     this._releaseWakeLock();

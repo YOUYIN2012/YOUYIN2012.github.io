@@ -4,10 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="referrer" content="no-referrer">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; script-src 'self' 'sha256-5Yxixw2h67BTJPioXZkn8iSi+Npc7PkcIAfGJvo5xyA='; style-src 'self'; img-src 'self'; media-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; upgrade-insecure-requests">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; script-src 'self' 'sha256-5Yxixw2h67BTJPioXZkn8iSi+Npc7PkcIAfGJvo5xyA='; style-src 'self'; img-src 'self'; media-src 'self' blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; upgrade-insecure-requests">
 
   <title>爱意随风起</title>
-  <meta name="description" content="一片用前沿 Web 技术写就的静谧星河：WebGL 着色器天空、交互星光、频谱驱动的极光与流星。">
+  <meta name="description" content="一片纯静态的实时星空：桌面 360° 地平亮星全景、固定满月、物理流星与音乐都在浏览器本地运行。">
   <meta name="author" content="爱意随风起">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#060b1e">
@@ -25,9 +25,12 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="爱意随风起">
   <meta property="og:title" content="爱意随风起">
-  <meta property="og:description" content="一片用代码写就的静谧星河。">
+  <meta property="og:description" content="360° 地平真实星图、固定满月与音乐共同呼吸的静谧星河。">
   <meta property="og:url" content="https://xn--kiv3tqg.xn--6qq986b3xl/">
   <meta property="og:image" content="https://xn--kiv3tqg.xn--6qq986b3xl/static/images/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="深蓝星河与一轮明月，四角星光点缀">
   <meta property="og:locale" content="zh_CN">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://xn--kiv3tqg.xn--6qq986b3xl/static/images/og.png">
@@ -41,25 +44,21 @@
 </head>
 
 <body>
-  <!-- 底层：WebGL2 着色器天空（渐变 / 极光 / 月亮 / 流星） -->
+  <!-- 可见控件只有音乐按钮；星空另保留单击星光与三击流星雨手势。 -->
   <canvas id="sky" class="layer sky" aria-hidden="true"></canvas>
+  <canvas id="stage" class="layer stage" aria-hidden="true"></canvas>
 
-  <!-- 上层：交互星空（连线星座 / 粒子 / 拖尾），唯一指针交互层 -->
-  <canvas id="stage" class="layer stage" role="img" aria-label="交互星图：轻触有星光回应，三连击会有流星雨"></canvas>
-
-  <!-- 音乐球：轻触播放/暂停 · 双击下一首 · 长按上一首（环形频谱可视化） -->
-  <button id="audioFab" class="fab" type="button" aria-label="播放背景音乐（双击下一首，长按上一首）" aria-pressed="false">
+  <!-- 音乐球：轻触播放/暂停，环形频谱与星空随音乐呼吸。 -->
+  <button id="audioFab" class="fab" type="button" aria-label="播放背景音乐" aria-pressed="false">
     <canvas id="fabViz" class="fab-viz" aria-hidden="true"></canvas>
     <svg class="fab-icon icon-play" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
     <svg class="fab-icon icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
   </button>
 
-  <!-- 键盘与辅助技术可直接触发流星雨；仅在获得焦点时显示。 -->
-  <button id="stormButton" class="a11y-action" type="button">触发流星雨</button>
-  <p id="status" class="sr-only" role="status" aria-live="polite"></p>
+  <p id="status" class="toast" role="status" aria-live="polite"></p>
 
   <audio id="audio" preload="none"></audio>
-  <noscript><p class="fallback-message">请启用 JavaScript 以观看星河并使用音乐与流星交互。</p></noscript>
+  <noscript><p class="fallback-message">请启用 JavaScript 以观看实时星空并使用音乐。</p></noscript>
 
   <script type="module" src="static/js/main.js"></script>
 </body>
