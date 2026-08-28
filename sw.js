@@ -9,7 +9,7 @@
  */
 
 const CACHE_PREFIX = 'love-sky';
-const VERSION = '20260822-10';
+const VERSION = '20260828-1';
 const CORE_CACHE = `${CACHE_PREFIX}-core-${VERSION}`;
 const RUNTIME_CACHE = `${CACHE_PREFIX}-runtime-${VERSION}`;
 const MEDIA_CACHE = `${CACHE_PREFIX}-media-${VERSION}`;
@@ -76,12 +76,10 @@ self.addEventListener('activate', (event) => {
     const staleKeys = keys
       .filter((key) => key.startsWith(`${CACHE_PREFIX}-`) && !keep.has(key));
     await Promise.all(staleKeys.map((key) => caches.delete(key)));
+    // 只清理旧缓存并接管作用域，不 navigate 强刷旧页面——那会立刻打断正在播放
+    // 的音乐。旧壳存续期间页面模块已全部加载、音频走网络优先，无版本混用路径；
+    // 重载时机由页面监听 controllerchange 后在完全空闲时自行决定。
     await self.clients.claim();
-    if (staleKeys.length) {
-      // 仅升级时刷新旧页面；首次安装没有旧缓存，不打断当前导航。
-      const windows = await self.clients.matchAll({ type: 'window' });
-      await Promise.all(windows.map((client) => client.navigate(client.url).catch(() => null)));
-    }
   })());
 });
 
@@ -221,8 +219,9 @@ function ensureFullAudioCached(url) {
   const existing = fullAudioFetches.get(url);
   if (existing) return existing;
 
-  let task;
-  task = (async () => {
+  // 闭包内对 task 的引用只可能发生在首个 await 之后——IIFE 在那里同步挂起，
+  // const 赋值先于 finally 执行完成——因此 const 声明自引用的在途任务是安全的。
+  const task = (async () => {
     try {
       const cache = await caches.open(MEDIA_CACHE);
       if (await cache.match(url)) return;

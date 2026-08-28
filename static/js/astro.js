@@ -36,6 +36,34 @@ export function observerLocationFromParams(params, timezoneOffsetMinutes = new D
   };
 }
 
+/* `?date=` 允许的观测时刻范围：岁差与恒星时多项式在两个世纪内足够准确，
+   超出后星图会开始出现肉眼可辨的偏差，宁可退回实时。 */
+const MIN_OBSERVE_MS = Date.parse('1900-01-01T00:00:00Z');
+const MAX_OBSERVE_MS = Date.parse('2100-01-01T23:59:59.999Z');
+
+/* `?date=` 接受的严格写法：HTML 日期输入（YYYY-MM-DD）与 ISO 8601 日期时间。
+   宽松格式（如 2026-8-13）在 V8 按本地时区解析成功、Firefox 返回 NaN，
+   同一 URL 的行为会跨浏览器漂移，必须先校验再交给 Date.parse。 */
+const OBSERVE_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+
+/**
+ * URL `date` 参数 → 回放时刻（Unix 毫秒）。纯 YYYY-MM-DD 视为当日 12:00 UTC，
+ * 保证太阳在多数有人居住的经度上已升起，回放画面不会一片漆黑。
+ * 缺省、空值、宽松格式与超出 1900–2100 年范围的输入一律返回 null（表示实时天空）。
+ */
+export function observerDateFromParams(params) {
+  if (!params?.has?.('date')) return null;
+  const raw = params.get('date')?.trim();
+  if (!raw) return null;
+  if (!OBSERVE_DATE_PATTERN.test(raw)) return null;
+  // 空格分隔虽被允许（HTML 输入的常见写法），但只有 T 分隔是跨引擎一致的
+  // ISO 形式，先归一再解析，避免各引擎对空格写法的宽容度不同。
+  const iso = (/^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T12:00:00Z` : raw).replace(' ', 'T');
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < MIN_OBSERVE_MS || ms > MAX_OBSERVE_MS) return null;
+  return ms;
+}
+
 /* ---------- 时间 ---------- */
 
 /** Unix 毫秒 → 儒略日 */
@@ -301,4 +329,47 @@ export function paletteForSun(sunAltDeg, localHour) {
   if (sunAltDeg >= 0) return { a: mid, b: 'day', t: (sunAltDeg / 8) ** 1.4 };
   if (sunAltDeg >= -12) return { a: 'night', b: mid, t: 1 - (sunAltDeg / -12) ** 1.2 };
   return { a: 'night', b: 'night', t: 0 };
+}
+
+/* ---------- 流星雨辐射点 ----------
+ * 八大流星雨的峰值日期与辐射点（RA 小时 / dec 度，J2000，取常用天文年历值）。
+ * 装饰级精度足够指示流星来向；峰值 ±3 天内视为活跃，同窗重叠取距峰值最近的一个。
+ */
+const METEOR_SHOWERS = [
+  { name: '象限仪座流星雨', month: 1, day: 4, raH: 15.3, dec: 49 },
+  { name: '天琴座流星雨', month: 4, day: 22, raH: 18.2, dec: 34 },
+  { name: '宝瓶座η流星雨', month: 5, day: 6, raH: 22.5, dec: -2 },
+  { name: '英仙座流星雨', month: 8, day: 13, raH: 3.2, dec: 58 },
+  { name: '猎户座流星雨', month: 10, day: 21, raH: 6.3, dec: 16 },
+  { name: '金牛座流星雨', month: 11, day: 5, raH: 3.4, dec: 14 },
+  { name: '狮子座流星雨', month: 11, day: 17, raH: 10.3, dec: 21.5 },
+  { name: '双子座流星雨', month: 12, day: 14, raH: 7.45, dec: 32.3 },
+];
+
+/**
+ * 观测时刻所处的活跃流星雨辐射点（J2000 赤道坐标，弧度），非活跃期返回 null。
+ * 窗口按与峰值相距的日序（天）判断；峰值在观测年前、当年、后三个年份都参与
+ * 比较，12 月底 ↔ 1 月初的跨年窗口与闰年日序偏移由此天然正确。
+ */
+export function meteorShowerRadiant(dateMs) {
+  if (!Number.isFinite(dateMs)) return null;
+  const year = new Date(dateMs).getUTCFullYear();
+  let best = null;
+  let bestDistance = Infinity;
+  for (const shower of METEOR_SHOWERS) {
+    for (const offsetYear of [year - 1, year, year + 1]) {
+      const peakMs = Date.UTC(offsetYear, shower.month - 1, shower.day, 12);
+      const distance = Math.abs(Math.round((peakMs - dateMs) / 86400000));
+      if (distance <= 3 && distance < bestDistance) {
+        best = shower;
+        bestDistance = distance;
+      }
+    }
+  }
+  if (!best) return null;
+  return {
+    name: best.name,
+    raRad: deg2rad(best.raH * 15),
+    decRad: deg2rad(best.dec),
+  };
 }

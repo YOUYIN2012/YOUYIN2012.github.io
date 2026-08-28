@@ -64,6 +64,10 @@ export class AudioEngine {
       this.synth?.off();
     });
     this.audio.addEventListener('pause', () => {
+      // ended→next 自动连播的衔接处，部分浏览器会先派发一次 pause：
+      // 此时不能启动环境音床（否则两首歌之间会漏出一截风声），但仍要释放
+      // 屏幕常亮锁，交给随后的 play 事件重新申请。
+      if (this.audio.ended) { this._releaseWakeLock(); return; }
       this.playing = false;
       // 环境音床走独立输出；暂停即清空视觉瞬态，避免残留节拍继续驱动天空。
       this.beatBoost = 0;
@@ -75,8 +79,23 @@ export class AudioEngine {
     });
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && this.playing) this._requestWakeLock();
+      // 恢复 pagehide 中挂起的上下文。此前 running 过的上下文无需新手势即可
+      // resume——resume 在手势外被允许的语义正由「此前已 running 过」保证——
+      // 环境音 gain 状态原样续跑；ensureContext 首次创建、等待用户手势的
+      // suspended 上下文不走这里，它的 resume 只发生在手势内的 _resumeCtx 链路。
+      // 条件刻意不带 !this.playing：播放在途时发生 pagehide（play 事件尚未
+      // 置位 playing）会被挂起，返回后若仍排除播放态，「正在播放但静音」将
+      // 无法自愈；而 play 监听器里的 resume 在此之前没有可靠的触发时机。
+      if (!document.hidden && this.ctx?.state === 'suspended') {
+        this.ctx.resume().catch(() => {});
+      }
     });
-    addEventListener('pagehide', () => this._releaseWakeLock());
+    addEventListener('pagehide', () => {
+      this._releaseWakeLock();
+      // 未播放时挂起 AudioContext：运行态的 WebAudio 会阻断 bfcache，隐藏期间
+      // 空闲的上下文也白耗电；播放中浏览器本就不会缓存页面，不干预。
+      if (this.ctx && !this.playing) this.ctx.suspend().catch(() => {});
+    });
     this._initSession();
   }
 
@@ -265,6 +284,10 @@ export class AudioEngine {
     if (!track || track._stored || track._localUrl || !this.store.ok) return;
     track._stored = true;
     try {
+      // 构造期 _warmLocalCopies 未 resolve 前 _localUrl 可能尚未置位（竞态窗口），
+      // fetch 前再查一次 OPFS：已入库就保持 _stored 置位直接返回，不再把约 5MB
+      // 的整曲重新下载一遍。失败仍回滚 _stored，允许下次播放重试。
+      if (await this.store.has(trackFilename(track.src))) return;
       const res = await fetch(track.src);
       if (!res.ok) { track._stored = false; return; }
       const bytes = await res.arrayBuffer();
@@ -329,7 +352,9 @@ export class AudioEngine {
     this._emit();
     this._syncSession();
     this._releaseWakeLock();
-    this.onError?.(error);
+    // fallback 告知调用方是否仍有合成音床兜底：ensureContext 失败时 synth 为
+    // null（不存在「浏览器合成音景」可切换），文案不能做虚假承诺。
+    this.onError?.(error, { fallback: Boolean(this.synth) });
   }
 
   _emit() {

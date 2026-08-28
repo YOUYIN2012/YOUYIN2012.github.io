@@ -10,6 +10,8 @@ import {
   julianDate,
   localSolarHour,
   lstHours,
+  meteorShowerRadiant,
+  observerDateFromParams,
   observerLocationFromParams,
   PANORAMA_VIEW,
   paletteForSun,
@@ -41,6 +43,64 @@ test('观测地点参数区分缺省值、合法零值与非法输入', () => {
     latDeg: 35,
     lonDeg: 120,
   });
+});
+
+test('?date= 参数区分合法回放时刻、越界与非法输入', () => {
+  const iso = '2026-08-13T20:00:00Z';
+  assert.equal(observerDateFromParams(new URLSearchParams(`date=${iso}`)), Date.parse(iso));
+  // 纯日期按当日 12:00 UTC 解析，避免回放画面落在深夜；两侧空白先裁剪。
+  assert.equal(
+    observerDateFromParams(new URLSearchParams('date=2026-08-13')),
+    Date.parse('2026-08-13T12:00:00Z'),
+  );
+  assert.equal(
+    observerDateFromParams(new URLSearchParams('date= 2026-08-13 ')),
+    Date.parse('2026-08-13T12:00:00Z'),
+  );
+  // 严格格式门禁：宽松写法在 V8 按本地时区解析、Firefox 返回 NaN，跨浏览器
+  // 行为会漂移，统一拒绝（退回实时天空）。
+  assert.equal(observerDateFromParams(new URLSearchParams('date=2026-8-13')), null);
+  assert.equal(observerDateFromParams(new URLSearchParams('date=2026-8-13T20:00:00Z')), null);
+  // 带时区偏移的 ISO 与空格分隔（归一为 T 后解析）都应得到确定结果。
+  // 偏移里的 + 在真实 URL 中必须写成 %2B（构造串里裸 + 会被解码成空格）。
+  assert.equal(
+    observerDateFromParams(new URLSearchParams('date=2026-08-13T20:00:00%2B08:00')),
+    Date.parse('2026-08-13T20:00:00+08:00'),
+  );
+  assert.equal(
+    observerDateFromParams(new URLSearchParams('date=2026-08-13 20:00')),
+    Date.parse('2026-08-13T20:00'),
+  );
+  // 岁差/恒星时多项式的精度边界：1900–2100 年以外的输入退回实时。
+  assert.equal(observerDateFromParams(new URLSearchParams('date=1899-12-31')), null);
+  assert.equal(observerDateFromParams(new URLSearchParams('date=2100-01-02')), null);
+  assert.equal(observerDateFromParams(new URLSearchParams('date=昨天再说')), null);
+  assert.equal(observerDateFromParams(new URLSearchParams('date=')), null);
+  assert.equal(observerDateFromParams(new URLSearchParams()), null);
+});
+
+test('流星雨辐射点在峰值 ±3 天窗口内命中，非活跃期返回 null', () => {
+  const perseids = meteorShowerRadiant(Date.UTC(2026, 7, 13, 12));
+  assert.equal(perseids.name, '英仙座流星雨');
+  assert.ok(Math.abs(perseids.raRad - deg2rad(3.2 * 15)) < 1e-9);
+  assert.ok(Math.abs(perseids.decRad - deg2rad(58)) < 1e-9);
+
+  // 峰值 8 月 13 日的闭窗口：8 月 10/16 活跃，8 月 9/17 不活跃。
+  assert.equal(meteorShowerRadiant(Date.UTC(2026, 7, 10, 12))?.name, '英仙座流星雨');
+  assert.equal(meteorShowerRadiant(Date.UTC(2026, 7, 16, 12))?.name, '英仙座流星雨');
+  assert.equal(meteorShowerRadiant(Date.UTC(2026, 7, 9, 12)), null);
+  assert.equal(meteorShowerRadiant(Date.UTC(2026, 7, 17, 12)), null);
+
+  // 6 月 1 日距宝瓶座η峰值（5 月 6 日）26 天，不属于任何流星雨。
+  assert.equal(meteorShowerRadiant(Date.UTC(2026, 5, 1, 12)), null);
+});
+
+test('流星雨跨年窗口：1 月 1 日命中象限仪座，12 月 31 日无人值守', () => {
+  // 1 月 1 日距象限仪座峰值（1 月 4 日）3 天，落在跨年窗口内。
+  assert.equal(meteorShowerRadiant(Date.UTC(2026, 0, 1, 12))?.name, '象限仪座流星雨');
+  // 12 月 31 日距次年 1 月 4 日峰值 4 天，已退出窗口。
+  assert.equal(meteorShowerRadiant(Date.UTC(2025, 11, 31, 12)), null);
+  assert.equal(meteorShowerRadiant(Date.UTC(2026, 0, 8, 12)), null);
 });
 
 test('儒略日、平恒星时与视恒星时具有正确锚点', () => {

@@ -98,33 +98,42 @@ for (const match of coreBlock.matchAll(/['"](\/[^'"]*)['"]/g)) {
   const asset = match[1] === '/' ? 'index.html' : match[1].slice(1);
   if (!existsSync(join(ROOT, asset))) errors.push(`sw.js: 预缓存资源不存在 ${match[1]}`);
 }
+// 从 main.js 出发的静态 import 闭包：CORE_ASSETS 预缓存与 modulepreload 校验共用。
+// 值为引入者的相对路径（入口为 null），报错时能指出依赖来源。
+const importClosure = new Map();
+{
+  const seen = new Set();
+  const queue = [[join(ROOT, 'static/js/main.js'), null]];
+  while (queue.length) {
+    const [file, from] = queue.pop();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const rel = relative(ROOT, file).split(/[\\/]/).join('/');
+    importClosure.set(rel, from);
+    const text = textByFile.get(file);
+    if (text === undefined) {
+      errors.push(`${rel}: 在静态 import 图中但无法读取`);
+      continue;
+    }
+    for (const match of text.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)) {
+      const spec = match[1];
+      if (!spec.startsWith('.')) continue;
+      queue.push([resolve(dirname(file), spec), rel]);
+    }
+  }
+}
 // 预缓存闭包校验：从 main.js 出发的静态 import 图必须全部列入 CORE_ASSETS。
 // 缺了这条检查，新增模块忘记预缓存时在线无感、离线首访才会 404。
 {
   const precached = new Set(
     [...coreBlock.matchAll(/['"](\/[^'"]*)['"]/g)].map((match) => match[1]),
   );
-  const seen = new Set();
-  const queue = [join(ROOT, 'static/js/main.js')];
-  while (queue.length) {
-    const file = queue.pop();
-    if (seen.has(file)) continue;
-    seen.add(file);
-    const text = textByFile.get(file);
-    if (text === undefined) {
-      errors.push(`${relative(ROOT, file)}: 在静态 import 图中但无法读取`);
-      continue;
-    }
-    for (const match of text.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)) {
-      const spec = match[1];
-      if (!spec.startsWith('.')) continue;
-      const target = resolve(dirname(file), spec);
-      const asset = `/${relative(ROOT, target).split(/[\\/]/).join('/')}`;
-      if (!precached.has(asset)) {
-        errors.push(`sw.js: 静态依赖未列入 CORE_ASSETS 预缓存 ${asset}（来自 ${relative(ROOT, file)}）`);
-      }
-      queue.push(target);
-    }
+  for (const [file, from] of importClosure) {
+    const asset = `/${file}`;
+    if (precached.has(asset)) continue;
+    errors.push(from
+      ? `sw.js: 静态依赖未列入 CORE_ASSETS 预缓存 ${asset}（来自 ${from}）`
+      : `sw.js: 静态依赖未列入 CORE_ASSETS 预缓存 ${asset}`);
   }
 }
 
@@ -150,6 +159,22 @@ if (!jsonLd) {
 } else {
   const hash = createHash('sha256').update(jsonLd).digest('base64');
   if (!html.includes(`'sha256-${hash}'`)) errors.push('index.html: CSP 中的 JSON-LD 哈希已过期');
+}
+// modulepreload 闭包校验：index.html 的 modulepreload 必须与静态 import 闭包完全一致。
+// 缺一条会让浏览器失去对应子模块的预加载；多一条通常是拼写错误或死条目。
+{
+  const preloaded = new Set(
+    [...html.matchAll(/<link\s+rel="modulepreload"\s+href="([^"]+)"/g)]
+      .map((match) => match[1].replace(/^\.\//, '')),
+  );
+  for (const file of importClosure.keys()) {
+    if (!preloaded.has(file)) errors.push(`index.html: 缺少 modulepreload ${file}`);
+  }
+  for (const href of preloaded) {
+    if (!importClosure.has(href)) {
+      errors.push(`index.html: modulepreload 指向静态 import 闭包之外的文件 ${href}`);
+    }
+  }
 }
 
 if (errors.length) {

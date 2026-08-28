@@ -8,8 +8,11 @@
 import {
   $, haptic, isCoarsePointer, rafThrottle,
 } from './utils.js';
-import { observerLocationFromParams } from './astro.js';
-import { Sky } from './fx/sky.js';
+import {
+  horizontalCoords, meteorShowerRadiant, observerDateFromParams,
+  observerLocationFromParams, projectHorizontal,
+} from './astro.js';
+import { Sky, starViewForDevice } from './fx/sky.js';
 import { Layer } from './fx/layer.js';
 import { AudioEngine } from './audio/engine.js';
 import { FabViz } from './ui/viz.js';
@@ -21,15 +24,33 @@ const status = $('#status');
 const coarse = isCoarsePointer();
 const params = new URLSearchParams(location.search);
 const observer = observerLocationFromParams(params);
+const dateMs = observerDateFromParams(params);
 
 const sky = new Sky(skyCanvas, {
   ...observer,
+  dateMs,
   disabled: params.get('webgl') === '0',
 });
 if (sky.ready) sky.start();
 else document.body.classList.add('no-webgl');
 
-const layer = new Layer(stage);
+// 真实流星雨活跃期（峰值 ±3 天）把辐射点对齐天象：辐射点高于地平线 5° 且
+// 投影在当前视窗内时使用真实屏幕坐标，否则返回 null 让 Layer 回落到随机辐射点。
+const view = starViewForDevice(coarse);
+const radiantProvider = () => {
+  // 实时模式（含 CSS 降级：refreshRealtimeSky 直接 return，astroDateMs 冻结在
+  // 页面加载时刻）必须取当前时刻，否则辐射点方位以 15°/小时随页面停留漂移；
+  // ?date= 回放（astroLive=false）沿用固定观测时刻。
+  const at = sky.astroLive ? Date.now() : sky.astroDateMs;
+  const shower = meteorShowerRadiant(at);
+  if (!shower) return null;
+  const hor = horizontalCoords(shower.raRad, shower.decRad, at, observer.latDeg, observer.lonDeg);
+  if (hor.alt < 5) return null;   // 辐射点在地平线下：不做掠地模型，回落随机
+  const p = projectHorizontal(hor.alt, hor.az, view);
+  if (!p) return null;            // 在视窗外（如移动端窄窗背对辐射点）回落
+  return { x: (p.x * 0.5 + 0.5) * layer.w, y: (0.5 - p.y * 0.5) * layer.h };
+};
+const layer = new Layer(stage, { radiantProvider });
 const engine = new AudioEngine($('#audio'));
 const fabViz = new FabViz($('#fabViz'), engine);
 const baseTitle = document.title;
@@ -98,9 +119,15 @@ engine.onState = ({ playing, track }) => {
     : '播放背景音乐');
   fabViz.poke();
   if (playing || engine.energy > 0.002) startEnergyLoop();
+  // 版本切换被音频播放推迟时，这里是最自然的重试时机。
+  tryVersionRefresh();
 };
 
-engine.onError = () => announce('音乐暂时无法播放，已切换为浏览器合成音景。');
+// fallback 由引擎按「合成音床是否存在」给出：ensureContext 失败时 synth 为 null，
+// 没有合成音景可切换，只能提示稍后再试，不能承诺「已切换为浏览器合成音景」。
+engine.onError = (error, { fallback = false } = {}) => announce(fallback
+  ? '音乐暂时无法播放，已切换为浏览器合成音景。'
+  : '音乐暂时无法播放，请稍后再试。');
 engine.onBeat = (strength) => layer.meteorFromBeat(strength);
 
 audioFab.addEventListener('click', () => {
@@ -133,11 +160,17 @@ function energyLoop(timestamp) {
   } else {
     energyRaf = 0;
     if (sky.ready) sky.setAudioEnergy(0);
+    // 播放中升级、暂停时能量尚未归零而被推迟的版本刷新：能量此后在 tick 里
+    // 指数衰减归零，不会再触发 onState，必须在这里补最后一次重试。
+    tryVersionRefresh();
   }
 }
 
 function refreshRealtimeSky() {
-  if (sky.ready) sky.setSkyTime(null, observer.latDeg, observer.lonDeg);
+  // ?date= 回放模式固定观测时刻：恒星时校准、标签页恢复等所有实时入口
+  // 都不能把固定时刻覆盖回“现在”。
+  if (dateMs != null || !sky.ready) return;
+  sky.setSkyTime(null, observer.latDeg, observer.lonDeg);
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -167,6 +200,7 @@ addEventListener('pageshow', (event) => {
 });
 
 // 恒星时每分钟校准；画面中的星星会随地球自转连续改变位置。
+// ?date= 回放模式下 refreshRealtimeSky 直接跳过，固定观测时刻不会被覆盖。
 setInterval(refreshRealtimeSky, 60_000);
 
 // 无界面验收入口：自动演示一次与三击手势相同的物理流星雨。
@@ -193,8 +227,31 @@ if ('PressureObserver' in globalThis && sky.ready) {
   } catch { /* API 存在但当前上下文没有权限时，继续使用 FPS 看门狗。 */ }
 }
 
+/* SW 版本切换不再由 Service Worker navigate 强刷页面——那会立刻打断正在播放
+   的音乐。旧壳存续期间本页全部模块已加载完毕，音频请求走网络优先策略，因此
+   不存在新旧版本混用的路径；只需在本页完全空闲（未播放且能量已归零）时一次性
+   重载，让新壳尽快接管。 */
+let pendingVersionRefresh = false;
+let versionRefreshDone = false;
+function tryVersionRefresh() {
+  if (!pendingVersionRefresh || versionRefreshDone) return;
+  // 正在播放或能量尚未回落时推迟；onState 与 energyLoop 的归零分支都会再次尝试。
+  if (!engine.playing && engine.energy < 0.002) {
+    versionRefreshDone = true;   // 一次性：防止重复 reload 形成刷新循环
+    location.reload();
+  }
+}
+
 if ('serviceWorker' in navigator &&
     (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) {
+  // 必须在 register 之前捕获：首次安装完成后的 claim 同样会触发
+  // controllerchange，但那是首次接管而非版本切换，不能因此刷新页面。
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) return;
+    pendingVersionRefresh = true;
+    tryVersionRefresh();
+  });
   addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => {});
   });

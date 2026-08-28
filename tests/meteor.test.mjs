@@ -65,6 +65,76 @@ test('流星轨迹反向延长后汇聚辐射点，同时保留左右方向变�
   assert.ok(left > 20 && right > 20, `left=${left}, right=${right}`);
 });
 
+test('spawnMeteor 优先使用注入的真实辐射点，provider 返回 null 时回落随机辐射点', () => {
+  const nativeDocument = globalThis.document;
+  globalThis.document = { hidden: false };
+  try {
+    // 固定辐射点置于屏幕上方（y 为负），确保任何起点的 dy 都不会被 clamp，
+    // 「反向外延穿过辐射点」的几何不变量对每个随机抽样都必须成立。
+    const realRadiant = { x: 720, y: -96 };
+    const fallbackRadiant = { x: 120, y: -40 };
+    const layer = Object.assign(Object.create(Layer.prototype), {
+      inactive: false,
+      reduced: false,
+      meteors: [],
+      w: 1440,
+      h: 900,
+      radiant: fallbackRadiant,
+      radiantProvider: () => realRadiant,
+      lastMeteorAt: 0,
+      start() {},
+    });
+    const backtracksThrough = (meteor, radiant) => {
+      const radialX = meteor.x - radiant.x;
+      const radialY = meteor.y - radiant.y;
+      const cross = radialX * meteor.vy - radialY * meteor.vx;
+      const scale = Math.hypot(radialX, radialY) * Math.hypot(meteor.vx, meteor.vy);
+      return Math.abs(cross) / scale < 1e-12 && radialX * meteor.vx + radialY * meteor.vy > 0;
+    };
+
+    for (let i = 0; i < 6; i++) assert.equal(layer.spawnMeteor(0.5), true);
+    assert.equal(layer.meteors.length, 6);
+    assert.ok(
+      layer.meteors.every((meteor) => backtracksThrough(meteor, realRadiant)),
+      '轨迹反向延长应穿过注入的真实辐射点',
+    );
+
+    layer.meteors.length = 0;
+    layer.radiantProvider = () => null;
+    assert.equal(layer.spawnMeteor(0.5), true);
+    assert.ok(
+      backtracksThrough(layer.meteors[0], fallbackRadiant),
+      'provider 返回 null 时应回落到 resize 生成的随机辐射点',
+    );
+  } finally {
+    if (nativeDocument === undefined) delete globalThis.document;
+    else globalThis.document = nativeDocument;
+  }
+});
+
+test('视窗内的真实辐射点低于出生带时，轨迹反向外延仍穿过辐射点', () => {
+  const random = seededRandom();
+  // 真实流星雨 provider 会传入视窗内的辐射点（如 alt≈30° → y≈500），此时
+  // 出生带整体高于辐射点、rawDy 为负：旧实现把它钳成 1 会把速度方向压成
+  // 近水平，反向外延不再穿过辐射点。夹角用 atan2(|叉积|, 点积) 计算，
+  // 点积为负（朝辐射点飞）时夹角必然超过 90°，一并被断言拦截。
+  const radiant = { x: 640, y: 500 };
+  const trajectories = Array.from(
+    { length: 60 },
+    () => createMeteorTrajectory(1280, 800, radiant, 0.6, random),
+  );
+
+  for (const meteor of trajectories) {
+    assert.ok(meteor.vy < 0, '出生带高于辐射点时流星应向上飞离辐射点');
+    const radialX = meteor.x - radiant.x;
+    const radialY = meteor.y - radiant.y;
+    const cross = radialX * meteor.vy - radialY * meteor.vx;
+    const dot = radialX * meteor.vx + radialY * meteor.vy;
+    const angle = Math.atan2(Math.abs(cross), dot);
+    assert.ok(angle < Math.PI / 180, `angle=${(angle * 180) / Math.PI}°`);
+  }
+});
+
 test('节拍蓄能有冷却时间，隐藏状态会丢弃而不是积聚', () => {
   let state = { charge: 0, threshold: 0.95, lastMeteorAt: 0 };
   state = advanceBeatGate(state, 1, 1000);

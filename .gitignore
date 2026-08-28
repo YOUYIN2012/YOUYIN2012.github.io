@@ -6,6 +6,7 @@
 # Editors and IDEs
 .idea/
 .vscode/
+.zcode/
 *.swp
 *.swo
 *~

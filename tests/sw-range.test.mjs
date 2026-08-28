@@ -25,12 +25,35 @@ function extractFunction(name) {
 
 const SIZE = 1000;
 
-test('新缓存完整安装后立即接管，并刷新仍在运行的旧版本页面', () => {
+test('新缓存完整安装后立即接管，升级刷新交还页面在空闲时自行重载', () => {
   assert.match(src, /await self\.skipWaiting\(\)/);
   assert.match(src, /await self\.clients\.claim\(\)/);
-  assert.match(src, /if \(staleKeys\.length\)/);
-  assert.match(src, /self\.clients\.matchAll\(\{ type: 'window' \}\)/);
-  assert.match(src, /client\.navigate\(client\.url\)/);
+  assert.match(src, /caches\.delete\(key\)/);
+  // activate 只清理旧缓存并接管作用域：client.navigate 强刷会立刻打断正在播放
+  // 的音乐；页面侧 controllerchange 守卫（见下一条测试）在空闲时自行重载。
+  assert.doesNotMatch(src, /client\.navigate/);
+});
+
+test('页面侧版本切换守卫：仅在旧壳被替换且完全空闲时一次性重载', async () => {
+  const main = await readFile(new URL('../static/js/main.js', import.meta.url), 'utf8');
+  // hadController 必须在 register 之前捕获：首次安装的 claim 也会触发
+  // controllerchange，但那不是版本切换。
+  assert.match(main, /const hadController = !!navigator\.serviceWorker\.controller;/);
+  assert.match(main, /addEventListener\('controllerchange'/);
+  assert.match(main, /pendingVersionRefresh = true/);
+  assert.match(main, /!engine\.playing && engine\.energy < 0\.002/);
+  assert.match(main, /versionRefreshDone = true/);
+  assert.match(main, /location\.reload\(\)/);
+  // 播放状态变化（onState）是被推迟后的重试时机。
+  const onState = main.match(/engine\.onState = \(\{ playing, track \}\) => \{[\s\S]*?\n\};/)?.[0] ?? '';
+  assert.ok(onState, '应能提取 engine.onState 回调');
+  assert.match(onState, /tryVersionRefresh\(\)/);
+  // 暂停时能量仍 >0.002 被推迟后不会再有 onState：能量在 energyLoop 里指数
+  // 衰减归零，归零分支必须补一次重试，否则刷新被无限期搁置。
+  const energyLoop = main.match(/function energyLoop\(timestamp\) \{[\s\S]*?\n\}/)?.[0] ?? '';
+  assert.ok(energyLoop, '应能提取 energyLoop 函数体');
+  assert.match(energyLoop, /energyRaf = 0/);
+  assert.match(energyLoop, /tryVersionRefresh\(\)/);
 });
 
 test('Range 头缺失或非 bytes 单位时回退整包', () => {

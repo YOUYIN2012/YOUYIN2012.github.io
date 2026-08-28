@@ -246,6 +246,7 @@ export class Sky {
     this.maxPixels = this.coarse ? 2_200_000 : 4_000_000;
     // 先减少 FBM octave，再逐级降低内部渲染分辨率。
     this.scaleSteps = [1.0, 1.0, 0.85, 0.7];
+    this.renderScale = 1;   // resize() 写入真实值：内部画布像素宽 / CSS 宽
     this.beat = 0;
     this.beatTarget = 0;
     this.time = 0;
@@ -414,6 +415,9 @@ export class Sky {
     const scale = this.scaleSteps[this.qualityLevel] * budgetScale;
     const w = Math.max(1, Math.round(cssW * dpr * scale));
     const h = Math.max(1, Math.round(cssH * dpr * scale));
+    // 内部渲染比例 = 画布像素宽 / CSS 宽（= dpr × 降档 scale）。星点通道用它
+    // 补偿 gl_PointSize：降档缩小画布后星星的物理尺寸保持恒定，不随像素预算变小。
+    this.renderScale = w / Math.max(1, cssW);
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;
@@ -568,7 +572,7 @@ export class Sky {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
     gl.useProgram(this.starProg);
-    gl.uniform1f(this.su.uDpr, Math.min(devicePixelRatio || 1, 2));
+    gl.uniform1f(this.su.uDpr, this.renderScale);
     gl.uniform1f(this.su.uTime, this.time);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.starBuf);
     gl.enableVertexAttribArray(0);

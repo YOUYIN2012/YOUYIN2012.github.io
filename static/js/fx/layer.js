@@ -70,7 +70,11 @@ export function createMeteorTrajectory(
   const startX = randomBetween(-0.04 * w, 1.04 * w, random);
   const startY = randomBetween(0.015 * h, 0.46 * h, random);
   const dx = startX - radiant.x;
-  const dy = Math.max(1, startY - radiant.y);
+  // 出生点可能低于或高于真实辐射点（provider 传入视窗内的点）；
+  // 保留符号让流星沿「离开辐射点」的方向飞，反向外延始终穿过辐射点。
+  // 随机回落路径的辐射点恒在屏幕上方，rawDy 恒为正，行为不变。
+  const rawDy = startY - radiant.y;
+  const dy = rawDy >= 0 ? Math.max(1, rawDy) : Math.min(-1, rawDy);
   const distance = Math.hypot(dx, dy);
   const ux = dx / distance;
   const uy = dy / distance;
@@ -131,7 +135,7 @@ export function advanceBeatGate(
 }
 
 export class Layer {
-  constructor(canvas) {
+  constructor(canvas, { radiantProvider = null } = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.coarse = isCoarsePointer();
@@ -154,6 +158,8 @@ export class Layer {
     this.trail = [];
     this.showerTimers = new Set();
     this.radiant = { x: 0, y: -1 };
+    // 可选：返回 CSS 像素辐射点（真实流星雨对齐天象）或 null（回落随机辐射点）。
+    this.radiantProvider = radiantProvider;
     this.beatGate = { charge: 0, threshold: 1.05, lastMeteorAt: performance.now() };
     this.frame = this.loop.bind(this);
     this.handleResize = rafThrottle(() => this.resize());
@@ -369,7 +375,10 @@ export class Layer {
   spawnMeteor(strength = 0.35) {
     if (this.inactive || document.hidden || this.reduced) return false;
     if (this.meteors.length >= MAX_METEORS) this.meteors.shift();
-    const meteor = createMeteorTrajectory(this.w, this.h, this.radiant, strength);
+    // 真实流星雨活跃且辐射点可见时对齐天象；provider 缺席或返回 null 时
+    // 回落到 resize/resume 生成的屏幕上方随机辐射点。
+    const radiant = this.radiantProvider?.() ?? this.radiant;
+    const meteor = createMeteorTrajectory(this.w, this.h, radiant, strength);
     meteor.life = 0;
     this.meteors.push(meteor);
     this.lastMeteorAt = performance.now();

@@ -91,6 +91,14 @@ export class FabViz {
 
   loop(ts) {
     if (!this.running) return;
+    // 减少动效且完全空闲时彻底休眠：画一帧空画布后停表，不再以低频空转重绘。
+    // 播放状态、能量或动效偏好变化都会经过 poke() 重新唤醒本循环。
+    if (this.reduced && !this.engine.playing && this.engine.energy < 0.002) {
+      this.stop();
+      const { ctx, canvas } = this;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
     this.rafId = 0;
     this.schedule();
     const dt = this.lastTs ? Math.min((ts - this.lastTs) / 1000, 0.1) : 0.016;
